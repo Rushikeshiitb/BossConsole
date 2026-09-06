@@ -6,6 +6,7 @@ import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -37,9 +38,10 @@ import androidx.compose.ui.window.Window
  *  - It fires when a CHILD overlay of the modal takes focus, which must not dismiss. A dropdown
  *    inside the modal is its own always-on-top window; see [shouldDismissOnFocusLoss].
  *
- * Still true: alt-tabbing to another application dismisses, discarding anything typed (e.g. a
- * half-entered URL). Giving this the same scrim treatment as [HeavyweightPopup] would fix that
- * properly, and is the direction if a second caller appears.
+ * Still true by default: alt-tabbing to another application dismisses, discarding anything typed
+ * (e.g. a half-entered URL). Giving this the same scrim treatment as [HeavyweightPopup] would fix
+ * that properly. A caller whose dismissal is destructive opts out of the focus-loss path entirely
+ * via [LocalDismissModalOnFocusLoss] (issue #152) rather than living with it.
  */
 @Composable
 fun HeavyweightModal(
@@ -50,6 +52,10 @@ fun HeavyweightModal(
     val parent = LocalAwtWindow.current
     val bounds = rememberOverlayParentBounds(parent)
     val state = rememberOverlayWindowState(bounds)
+    // Read here, in the composable body, because the AWT focus listener below is not a composition
+    // and cannot call `.current`. A modal that opts out (see [LocalDismissModalOnFocusLoss]) still
+    // dismisses on Escape and on its own scrim - only the focus-loss path is suppressed.
+    val dismissOnFocusLoss = LocalDismissModalOnFocusLoss.current
 
     Window(
         onCloseRequest = onDismissRequest,
@@ -84,14 +90,19 @@ fun HeavyweightModal(
         // it fires this listener, and dismissing here would close the dialog the dropdown belongs
         // to — the user sees the whole New Tab dialog vanish when they expand the folder list. The
         // native directory picker behind "Browse…" is the same shape.
-        DisposableEffect(window) {
+        DisposableEffect(window, dismissOnFocusLoss) {
             val listener =
                 object : java.awt.event.WindowFocusListener {
                     override fun windowGainedFocus(e: java.awt.event.WindowEvent?) = Unit
 
                     override fun windowLostFocus(e: java.awt.event.WindowEvent?) {
-                        if (!shouldDismissOnFocusLoss(OverlayConfig.openHeavyweightPopups, e?.oppositeWindow)) return
-                        onDismissRequest()
+                        val dismiss =
+                            shouldDismissOnFocusLoss(
+                                dismissOnFocusLoss,
+                                OverlayConfig.openHeavyweightPopups,
+                                e?.oppositeWindow,
+                            )
+                        if (dismiss) onDismissRequest()
                     }
                 }
             window.addWindowFocusListener(listener)
@@ -104,9 +115,11 @@ fun HeavyweightModal(
 /**
  * Whether a heavyweight modal losing focus should actually dismiss it.
  *
- * Focus loss alone is not enough, because a modal can host its own overlays. Two things suppress
- * the dismissal:
+ * Focus loss alone is not enough. Three things suppress the dismissal:
  *
+ *  - [dismissOnFocusLoss] is false — the caller opted this modal out because focus-loss dismissal
+ *    would run a destructive action. See [LocalDismissModalOnFocusLoss]. The `&&` evaluates it
+ *    first, so an opted-out modal short-circuits to false whatever the other two say.
  *  - [openHeavyweightPopups] > 0 — one of our own heavyweight popups (a dropdown or context menu
  *    inside the modal) is open and took the focus. Dismissing would close the dialog the popup
  *    belongs to.
@@ -114,12 +127,39 @@ fun HeavyweightModal(
  *    such as a native file chooser owned by the app, rather than to another application. A null
  *    opposite window means focus left the app entirely, which IS a real dismiss.
  *
- * Pure so both conditions can be pinned by tests; the composable only supplies the two inputs.
+ * Pure so all three conditions can be pinned by tests; the composable only supplies the inputs.
  */
 internal fun shouldDismissOnFocusLoss(
+    dismissOnFocusLoss: Boolean,
     openHeavyweightPopups: Int,
     oppositeWindow: java.awt.Window?,
-): Boolean {
-    if (openHeavyweightPopups > 0) return false
-    return oppositeWindow == null
-}
+): Boolean = dismissOnFocusLoss && openHeavyweightPopups <= 0 && oppositeWindow == null
+
+/**
+ * Whether a heavyweight modal should dismiss when focus leaves the application entirely.
+ *
+ * Default `true`, which is the historical behaviour and the right one for `NewTabDialog`: a
+ * half-typed URL is cheap to redo, and dismiss-on-focus-loss is what makes the modal feel like a
+ * modal. A caller provides `false` when its `onDismissRequest` runs a **destructive** action that
+ * an alt-tab must not trigger silently - the memory-pressure notice (which acknowledges and clears
+ * a once-per-session notice) and the screen-capture picker (which cancels the share). Opting out
+ * suppresses ONLY the focus-loss path in [shouldDismissOnFocusLoss]; Escape and the caller's own
+ * scrim still dismiss, so the modal stays dismissable on purpose.
+ *
+ * **Why a host CompositionLocal rather than a parameter on `BossDialog`.** The conceptually right
+ * home is a `dismissOnFocusLoss` argument threaded `BossDialog` -> `BossOverlayHost.modalRenderer`
+ * -> here. Both of those signatures are pinned by the binary-compatibility validator in
+ * `boss-plugin-api` as well as here, so widening either is a new overload plus a new injected
+ * renderer field and a coordinated api-then-host release (issue #152 spells this out). The two
+ * callers that need the opt-out are both host dialogs in this module, none of it is reachable from
+ * `PluginContext`, and this local, `HeavyweightModal` and both call sites all live in composeApp -
+ * so an `internal` local carries the flag with no api surface and no release train, using the same
+ * composition-scoped mechanism as [ai.rever.boss.plugin.ui.LocalHeavyweightOverlays]. If a plugin
+ * dialog ever needs the same opt-out, promote this to the `BossDialog` overload the issue describes;
+ * until then the narrower host-only channel is the honest scope.
+ *
+ * The provider must wrap the whole `BossDialog(...)` call: `BossDialog` invokes the injected
+ * renderer inline, so `HeavyweightModal` composes as a descendant of the provider and reads the
+ * value from its own body (the AWT focus listener is not a composition and cannot).
+ */
+internal val LocalDismissModalOnFocusLoss = staticCompositionLocalOf { true }

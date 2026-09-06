@@ -1,5 +1,6 @@
 package ai.rever.boss.performance
 
+import ai.rever.boss.components.overlays.LocalDismissModalOnFocusLoss
 import ai.rever.boss.plugin.ui.BossDialog
 import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.background
@@ -16,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -44,19 +46,25 @@ fun MemoryPressureNoticeDialog(onRestartRequested: () -> Unit) {
 
     val colors = BossTheme.colors
 
-    BossDialog(onDismissRequest = { MemoryPressureWatchdog.acknowledge() }) {
-        Column(
-            modifier =
-                Modifier
-                    .width(430.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(colors.panel)
-                    .border(1.dp, colors.line, RoundedCornerShape(8.dp))
-                    .padding(20.dp),
-        ) {
-            NoticeBody(current)
-            Spacer(Modifier.height(18.dp))
-            NoticeActions(current, onRestartRequested)
+    // Opt out of focus-loss dismissal: dismissing here runs acknowledge(), which clears the notice
+    // for the rest of the session (the watchdog tightens once and never loosens). An alt-tab away
+    // must not silently consume the one notice and its restart offer. Escape and the "Continue"
+    // button still dismiss deliberately. See LocalDismissModalOnFocusLoss and issue #152.
+    CompositionLocalProvider(LocalDismissModalOnFocusLoss provides false) {
+        BossDialog(onDismissRequest = { MemoryPressureWatchdog.acknowledge() }) {
+            Column(
+                modifier =
+                    Modifier
+                        .width(430.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colors.panel)
+                        .border(1.dp, colors.line, RoundedCornerShape(8.dp))
+                        .padding(20.dp),
+            ) {
+                NoticeBody(current)
+                Spacer(Modifier.height(18.dp))
+                NoticeActions(current, onRestartRequested)
+            }
         }
     }
 }

@@ -321,15 +321,41 @@ class HeavyweightOverlayTest {
         // The reported dead end: NewTabDialog's folder dropdown is a ContextMenu, which under
         // HARDWARE is its own always-on-top window. Opening it fires the modal's windowLostFocus,
         // and dismissing there closed the entire dialog the dropdown belongs to.
-        assertFalse(shouldDismissOnFocusLoss(openHeavyweightPopups = 1, oppositeWindow = null))
-        assertFalse(shouldDismissOnFocusLoss(openHeavyweightPopups = 2, oppositeWindow = null))
+        assertFalse(
+            shouldDismissOnFocusLoss(dismissOnFocusLoss = true, openHeavyweightPopups = 1, oppositeWindow = null),
+        )
+        assertFalse(
+            shouldDismissOnFocusLoss(dismissOnFocusLoss = true, openHeavyweightPopups = 2, oppositeWindow = null),
+        )
     }
 
     @Test
     fun `a modal dismisses when focus leaves the application entirely`() {
         // A null opposite window means focus went somewhere AWT does not own - another app. That
         // is the case the focus-loss dismissal actually exists for.
-        assertTrue(shouldDismissOnFocusLoss(openHeavyweightPopups = 0, oppositeWindow = null))
+        assertTrue(
+            shouldDismissOnFocusLoss(dismissOnFocusLoss = true, openHeavyweightPopups = 0, oppositeWindow = null),
+        )
+    }
+
+    @Test
+    fun `an opted-out modal never dismisses on focus loss, even leaving the app entirely`() {
+        // The #152 regression: MemoryPressureNoticeDialog and ScreenCapturePickerDialog dismiss to a
+        // destructive action (acknowledge the once-per-session notice; cancel the share). They pass
+        // dismissOnFocusLoss = false so an alt-tab away cannot trigger it. This is the case a null
+        // oppositeWindow - focus leaving the app - would otherwise dismiss.
+        assertFalse(
+            shouldDismissOnFocusLoss(dismissOnFocusLoss = false, openHeavyweightPopups = 0, oppositeWindow = null),
+        )
+    }
+
+    @Test
+    fun `the opt-out is checked first, so a popup count cannot make an opted-out modal dismiss`() {
+        // dismissOnFocusLoss = false must win regardless of the other inputs: it is the strongest
+        // suppressor, checked before the popup count and the opposite-window test.
+        assertFalse(
+            shouldDismissOnFocusLoss(dismissOnFocusLoss = false, openHeavyweightPopups = 1, oppositeWindow = null),
+        )
     }
 
     // --- overlay transparency diagnosis ---
