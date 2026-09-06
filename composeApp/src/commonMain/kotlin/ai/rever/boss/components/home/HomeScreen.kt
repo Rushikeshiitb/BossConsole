@@ -5,6 +5,7 @@ import ai.rever.boss.components.dashboard.cards.FileCard
 import ai.rever.boss.components.dashboard.cards.ProjectCard
 import ai.rever.boss.components.dashboard.cards.WorkspaceCard
 import ai.rever.boss.components.dashboard.sections.DashboardSection
+import ai.rever.boss.components.dashboard.sections.WhatsNewSection
 import ai.rever.boss.components.plugin.panels.left_top.ProjectState
 import ai.rever.boss.components.workspaces.LayoutWorkspace
 import ai.rever.boss.components.workspaces.workspaceManager
@@ -99,6 +100,10 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                 projectName = selectedProject.name.ifBlank { "No project" },
                 onSearch = actions::openSearch,
             )
+
+            // Takes no actions and hides itself when there is nothing to show, so it is safe in the
+            // browser plugin's callback-free about:blank copy of this screen.
+            WhatsNewSection()
 
             JumpBackInSection(
                 recentProjects = recentProjects,
