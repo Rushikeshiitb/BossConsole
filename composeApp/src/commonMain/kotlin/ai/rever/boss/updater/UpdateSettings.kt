@@ -32,6 +32,16 @@ expect object UpdateSettings {
      * is dismissed.
      */
     var lastDismissedVersion: String?
+
+    /**
+     * The newest release version the user has seen in the Dashboard "What's new"
+     * feed. Releases newer than this are badged NEW there; viewing the feed
+     * advances it to the latest release. Null until the feed has been shown
+     * once, which the feed treats as "badge nothing" so a first run is not a
+     * wall of NEW badges. Distinct from [lastDismissedVersion], which governs the
+     * update PROMPT rather than the feed.
+     */
+    var lastSeenReleaseVersion: String?
 }
 
 /**
