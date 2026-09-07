@@ -93,19 +93,26 @@ private fun resolveServiceJar(
 private val reapLogger = LoggerFactory.getLogger("KernelReaper")
 
 /**
- * True while [reapChildren] is running, so recovery paths know to stand down.
+ * How many [reapChildren] calls are in flight, so recovery paths know to stand down while any is.
  *
  * Stopping supervision closes the *detection* path but not the *action* path: the failure collector
  * runs on the kernel's own scope, which a reap deliberately does not cancel, and a `handleFailure`
  * already in flight can sit for the orchestrator-advice timeout and then respawn a child *after* the
  * reap took its snapshot. A shared flow with buffered failures can also deliver one after the
  * cancel. Either way the exiting host gains a child nothing will reap.
+ *
+ * A COUNT, not a flag. `main.kt` and `KernelBootstrap` each install a JVM shutdown hook, and the JVM
+ * runs hooks concurrently in unspecified order, so a bare boolean's `finally { reaping = false }`
+ * could clear the in-progress signal while the OTHER hook is still reaping. Incrementing on entry
+ * and decrementing on exit keeps the signal true until the last reap finishes, and returns it to
+ * false afterwards so an in-process mode switch ([KernelBootstrap.shutdown]) can spawn again.
  */
-@Volatile
-private var reaping = false
+private val reapDepth =
+    java.util.concurrent.atomic
+        .AtomicInteger(0)
 
 /** Whether a reap is in progress. Recovery must not spawn anything while this is true. */
-internal fun isReaping(): Boolean = reaping
+internal fun isReaping(): Boolean = reapDepth.get() > 0
 
 /**
  * Stop supervising children, then kill every registered one inside [gracePeriodMs] total.
@@ -133,7 +140,7 @@ internal fun reapChildren(
     registry: ProcessRegistry?,
     gracePeriodMs: Long = 3_000,
 ) {
-    reaping = true
+    reapDepth.incrementAndGet()
     try {
         runCatching { monitor?.stopSupervision() }
 
@@ -166,8 +173,14 @@ internal fun reapChildren(
 
         // Children are dead, so nothing is going to answer on these. Close them without waiting.
         children.forEach { runCatching { it.ipcClient?.shutdown(timeoutMs = 0) } }
+
+        // Drop the reaped handles from the registry. Harmless at JVM exit, but shutdown() also runs
+        // this for an in-process mode switch, where the registry is process-wide and outlives the
+        // reap - stale dead entries would otherwise persist into the next generation. Keyed by
+        // config.processId, which is exactly what ProcessSpawner.spawn registered them under.
+        children.forEach { runCatching { registry?.unregister(it.config.processId) } }
     } finally {
-        reaping = false
+        reapDepth.decrementAndGet()
     }
 }
 

@@ -3,6 +3,7 @@ package ai.rever.boss.components.plugin
 import ai.rever.boss.ipc.BossIpcClient
 import ai.rever.boss.ipc.IpcVersion
 import ai.rever.boss.kernel.KernelBootstrap
+import ai.rever.boss.kernel.isReaping
 import ai.rever.boss.plugin.api.PluginManifest
 import ai.rever.boss.plugin.loader.PluginManifestReader
 import ai.rever.boss.process.ManagedProcess
@@ -84,6 +85,17 @@ class OutOfProcessPluginSpawnerImpl(
         return withContext(Dispatchers.IO) {
             try {
                 val pluginId = manifest.pluginId
+
+                // Stand down if a reap is in progress. A reap means the host is exiting (or
+                // switching to in-process): the reaper has already snapshotted the children it will
+                // kill, so a child registered now survives past it, unreaped. respawnCandidate()
+                // already refuses during a reap; this is the plugin LOAD path doing the same, which
+                // isReaping() exists to gate. See KernelBootstrap.reapChildren.
+                if (isReaping()) {
+                    val msg = "Refusing to spawn plugin $pluginId: a reap is in progress"
+                    logger.warn(msg)
+                    return@withContext Result.failure<Unit>(IllegalStateException(msg))
+                }
 
                 // IPC-compat gate — if the runtime JAR on disk doesn't match
                 // the host's current IPC version we refuse here rather than
