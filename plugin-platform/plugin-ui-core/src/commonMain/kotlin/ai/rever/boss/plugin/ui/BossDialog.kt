@@ -1,8 +1,7 @@
 package ai.rever.boss.plugin.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -20,7 +19,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -31,6 +29,8 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.dialog
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -151,6 +151,39 @@ fun BossDialog(
 internal const val INPUT_ARM_DELAY_MS = 200L
 
 /**
+ * How long an `AnchorBounds` popup waits for its anchor to measure before reporting that it never
+ * did. Long enough to clear cold-start composition and a slow first layout, short enough that the
+ * silent-empty-popup case reaches the log while the user is still looking at it. See [BossPopup].
+ */
+private const val ANCHOR_MEASURE_TIMEOUT_MS = 500L
+
+/**
+ * Reports once, after [ANCHOR_MEASURE_TIMEOUT_MS], that an `AnchorBounds` popup never measured its
+ * anchor - so "my dropdown never opens" becomes a log line instead of a silent empty overlay.
+ *
+ * A popup that anchors to a layout which measures but never places, or is composed off-screen, never
+ * receives an `onGloballyPositioned`, so its anchor position stays null and it renders nothing,
+ * forever. Only `AnchorBounds` reads the anchor; cursor anchoring never does, so only it is at risk.
+ *
+ * [anchorMeasured] is a lambda, not a snapshot value, precisely so the effect re-reads it after the
+ * delay rather than capturing the always-null first-frame value. Extracted from [BossPopup] so these
+ * branches do not count against that composable's cyclomatic complexity, and routed through
+ * [BossOverlayHost.reportUnmeasuredAnchor] so a flapping anchor logs once, not per failure.
+ */
+@Composable
+private fun UnmeasuredAnchorDiagnostic(
+    heavyweight: Boolean,
+    anchoring: BossPopupAnchoring,
+    anchorMeasured: () -> Boolean,
+) {
+    if (!heavyweight || anchoring != BossPopupAnchoring.AnchorBounds) return
+    LaunchedEffect(Unit) {
+        delay(ANCHOR_MEASURE_TIMEOUT_MS)
+        if (!anchorMeasured()) BossOverlayHost.reportUnmeasuredAnchor()
+    }
+}
+
+/**
  * Whether a freshly-opened modal should start accepting pointer input.
  *
  * One input, deliberately: **a held button vetoes arming, whichever signal is asking.** Both callers
@@ -192,8 +225,6 @@ internal fun ScrimmedModalContent(
     onDismissRequest: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    val scrimInteraction = remember { MutableInteractionSource() }
-    val cardInteraction = remember { MutableInteractionSource() }
     var armed by remember { mutableStateOf(false) }
     // Tracks the button state the timer has to consult. Not snapshot-observed for recomposition,
     // only read inside the effect, so a plain holder would do; kept as state so the pointer handler
@@ -231,17 +262,17 @@ internal fun ScrimmedModalContent(
                     }
                 }.then(
                     if (dismissOnClickOutside) {
-                        // canFocus = false for the same reason as the card: `clickable` installs a
-                        // focus target with Enter/Space semantics, so a full-window scrim would join
-                        // the dialog's traversal order and dismiss it from the keyboard - surprising
-                        // in a dialog with text fields - and announce itself to accessibility.
-                        Modifier
-                            .focusProperties { canFocus = false }
-                            .clickable(
-                                interactionSource = scrimInteraction,
-                                indication = null,
-                                onClick = onDismissRequest,
-                            )
+                        // A tap via pointerInput, NOT `clickable`. `clickable` installs a focusable
+                        // node carrying an OnClick action, and the card inside declares dialog()
+                        // semantics - which Compose refuses to merge under a clickable/focusable
+                        // ancestor ("a dialog should not be a child of a clickable node"), crashing
+                        // the whole modal. detectTapGestures dismisses on a background tap while
+                        // adding no semantics node, so the card's dialog() has no clickable ancestor.
+                        // A tap on the card is consumed by the card's own swallow before it reaches
+                        // here; a tap before arming is consumed on the Initial pass above.
+                        Modifier.pointerInput(Unit) {
+                            detectTapGestures { onDismissRequest() }
+                        }
                     } else {
                         Modifier
                     },
@@ -249,14 +280,19 @@ internal fun ScrimmedModalContent(
         contentAlignment = Alignment.Center,
     ) {
         Box(
+            // dialog() marks this subtree as a dialog for accessibility. A heavyweight modal is a
+            // real OS window, but a screen reader only sees the Compose tree, and the lightweight
+            // `Dialog` path announces a dialog where this path did not.
+            //
+            // The tap swallow uses detectTapGestures, not `clickable`: `clickable` gives the card a
+            // Button ROLE, so a screen reader announced the whole dialog card as a button.
+            // detectTapGestures still consumes a press that lands on the card's own background -
+            // keeping it off the scrim, so a click inside the dialog does not dismiss it - while the
+            // content's own buttons handle their taps first on the main pass.
             modifier =
                 Modifier
-                    .focusProperties { canFocus = false }
-                    .clickable(
-                        interactionSource = cardInteraction,
-                        indication = null,
-                        onClick = {},
-                    ),
+                    .semantics { dialog() }
+                    .pointerInput(Unit) { detectTapGestures { } },
         ) {
             content()
         }
@@ -443,6 +479,13 @@ fun BossPopup(
     var measuredWidthPx by remember { mutableStateOf(0) }
     val anchorInWindow =
         anchorPositionPx?.let { anchorRectInDp(it, IntSize(measuredWidthPx, 0), density) }
+    // Report once, after a grace period, if an AnchorBounds popup never measures its anchor.
+    // Extracted so its branches do not count against BossPopup's cyclomatic complexity.
+    UnmeasuredAnchorDiagnostic(
+        heavyweight = heavyweight,
+        anchoring = anchoring,
+        anchorMeasured = { anchorPositionPx != null },
+    )
     Box(
         modifier =
             Modifier
@@ -468,7 +511,13 @@ fun BossPopup(
                 // sees the node as the PARENT sees it - correct position, zero size - and the width
                 // comes from the measurement captured within.
                 .onGloballyPositioned { coordinates ->
-                    anchorPositionPx = coordinates.positionInWindow()
+                    // Equality guard: onGloballyPositioned fires on every frame of a window move or
+                    // resize, and a snapshot write from here invalidates composition from inside the
+                    // layout phase - so an unconditional assignment costs a redundant
+                    // compose-measure-layout pass per frame for every open popup. The steady state
+                    // does not move, so this writes nothing.
+                    val next = coordinates.positionInWindow()
+                    if (next != anchorPositionPx) anchorPositionPx = next
                 }.layout { measurable, constraints ->
                     val placeable = measurable.measure(constraints)
                     // The CONSTRAINT, not the placeable. On the heavyweight path this Box has no
@@ -476,8 +525,10 @@ fun BossPopup(
                     // the anchor would report no width at all. maxWidth is what the caller is
                     // offering, which is the width the popup should adopt. Unbounded (a scrolling
                     // parent) has no such answer, so fall back to whatever the content measured.
-                    measuredWidthPx =
+                    val nextWidth =
                         if (constraints.hasBoundedWidth) constraints.maxWidth else placeable.width
+                    // Same equality guard as the position write above, and for the same reason.
+                    if (nextWidth != measuredWidthPx) measuredWidthPx = nextWidth
                     // Report 0x0 but still PLACE the child: the lightweight path nests a real Popup
                     // in here, and an unplaced subtree would never compose it.
                     layout(0, 0) { placeable.place(0, 0) }
