@@ -15,6 +15,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -225,6 +226,7 @@ internal fun ScrimmedModalContent(
     onDismissRequest: () -> Unit,
     content: @Composable () -> Unit,
 ) {
+    val currentDismissRequest by rememberUpdatedState(onDismissRequest)
     var armed by remember { mutableStateOf(false) }
     // Tracks the button state the timer has to consult. Not snapshot-observed for recomposition,
     // only read inside the effect, so a plain holder would do; kept as state so the pointer handler
@@ -271,7 +273,7 @@ internal fun ScrimmedModalContent(
                         // A tap on the card is consumed by the card's own swallow before it reaches
                         // here; a tap before arming is consumed on the Initial pass above.
                         Modifier.pointerInput(Unit) {
-                            detectTapGestures { onDismissRequest() }
+                            detectTapGestures { currentDismissRequest() }
                         }
                     } else {
                         Modifier
@@ -284,8 +286,8 @@ internal fun ScrimmedModalContent(
             // real OS window, but a screen reader only sees the Compose tree, and the lightweight
             // `Dialog` path announces a dialog where this path did not.
             //
-            // The tap swallow uses detectTapGestures, not `clickable`: `clickable` gives the card a
-            // Button ROLE, so a screen reader announced the whole dialog card as a button.
+            // The tap swallow uses detectTapGestures, not `clickable`: the card background should
+            // not expose an accessibility click action.
             // detectTapGestures still consumes a press that lands on the card's own background -
             // keeping it off the scrim, so a click inside the dialog does not dismiss it - while the
             // content's own buttons handle their taps first on the main pass.
@@ -511,11 +513,8 @@ fun BossPopup(
                 // sees the node as the PARENT sees it - correct position, zero size - and the width
                 // comes from the measurement captured within.
                 .onGloballyPositioned { coordinates ->
-                    // Equality guard: onGloballyPositioned fires on every frame of a window move or
-                    // resize, and a snapshot write from here invalidates composition from inside the
-                    // layout phase - so an unconditional assignment costs a redundant
-                    // compose-measure-layout pass per frame for every open popup. The steady state
-                    // does not move, so this writes nothing.
+                    // Explicitly skip equal measurements. mutableStateOf already uses structural
+                    // equality, so this does not change snapshot invalidation semantics.
                     val next = coordinates.positionInWindow()
                     if (next != anchorPositionPx) anchorPositionPx = next
                 }.layout { measurable, constraints ->
@@ -527,7 +526,7 @@ fun BossPopup(
                     // parent) has no such answer, so fall back to whatever the content measured.
                     val nextWidth =
                         if (constraints.hasBoundedWidth) constraints.maxWidth else placeable.width
-                    // Same equality guard as the position write above, and for the same reason.
+                    // Avoid invoking the setter when the measured width is unchanged.
                     if (nextWidth != measuredWidthPx) measuredWidthPx = nextWidth
                     // Report 0x0 but still PLACE the child: the lightweight path nests a real Popup
                     // in here, and an unplaced subtree would never compose it.
