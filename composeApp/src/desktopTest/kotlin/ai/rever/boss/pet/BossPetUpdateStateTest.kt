@@ -35,4 +35,15 @@ class BossPetUpdateStateTest {
         controller.dismissAnnouncement()
         assertEquals(BossPetMood.Idle, controller.mood.value)
     }
+
+    @Test
+    fun `an install failure survives even if the state flow skipped installing`() {
+        val controller = BossPetController()
+        reportPetUpdateState(controller, UpdateState.ReadyToInstall("/tmp/update"))
+        reportPetUpdateState(controller, UpdateState.Error("Install failed"))
+        controller.onIdleTimeout()
+        assertEquals(BossPetMood.Failed("Update failed", "app-update", 1), controller.mood.value)
+        controller.onIdleTimeout()
+        assertEquals(BossPetMood.Failed("Update failed", "app-update", 1), controller.mood.value)
+    }
 }

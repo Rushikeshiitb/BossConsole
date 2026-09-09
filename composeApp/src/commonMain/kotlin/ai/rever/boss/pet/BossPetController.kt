@@ -27,7 +27,7 @@ class BossPetController {
         id: String,
         label: String,
     ) {
-        if (!activeTasks.remove(id) && hasAnnouncement(id)) return
+        if (!activeTasks.remove(id) && hasAnnouncement(id, failure = false)) return
         val sequence = nextAnnouncement++
         announcements[sequence] = BossPetMood.Completed(label, id, sequence)
         publish()
@@ -38,7 +38,7 @@ class BossPetController {
         id: String,
         label: String,
     ) {
-        if (!activeTasks.remove(id) && hasAnnouncement(id)) return
+        if (!activeTasks.remove(id) && hasAnnouncement(id, failure = true)) return
         val sequence = nextAnnouncement++
         announcements[sequence] = BossPetMood.Failed(label, id, sequence)
         publish()
@@ -63,11 +63,14 @@ class BossPetController {
         if (_mood.value is BossPetMood.Completed) dismissAnnouncement()
     }
 
-    private fun hasAnnouncement(id: String): Boolean =
+    private fun hasAnnouncement(
+        id: String,
+        failure: Boolean,
+    ): Boolean =
         announcements.values.any {
             when (it) {
-                is BossPetMood.Completed -> it.taskId == id
-                is BossPetMood.Failed -> it.taskId == id
+                is BossPetMood.Completed -> !failure && it.taskId == id
+                is BossPetMood.Failed -> failure && it.taskId == id
                 else -> false
             }
         }
