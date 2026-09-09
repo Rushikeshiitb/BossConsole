@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
+import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -71,8 +72,6 @@ import kotlin.math.roundToInt
 fun BossPetWindow(onHide: () -> Unit) {
     val mood by BossPet.controller.mood.collectAsState()
 
-    val saveScope = rememberCoroutineScope()
-    val saveMutex = remember { Mutex() }
     val initial = remember { initialPosition() }
     val windowState =
         rememberWindowState(
@@ -94,46 +93,56 @@ fun BossPetWindow(onHide: () -> Unit) {
             modifier =
                 Modifier
                     .fillMaxSize()
-                    // Drag anywhere on the pet to move the window; a plain click (no drag) dismisses
-                    // a standing announcement. Two pointerInput modifiers so the tap detector and the
-                    // drag detector each see the gesture rather than one swallowing the other.
+                    .then(rememberPetDragModifier(windowState))
                     .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragEnd = {
-                                val p = windowState.position
-                                if (p is WindowPosition.Absolute) {
-                                    val anchor =
-                                        petPosition(
-                                            p.x.value.roundToInt(),
-                                            p.y.value.roundToInt(),
-                                            connectedScreens(),
-                                            PET_WIDTH,
-                                            PET_HEIGHT,
-                                        )
-                                    windowState.position = WindowPosition(anchor.first.dp, anchor.second.dp)
-                                    saveScope.launch {
-                                        saveMutex.withLock {
-                                            withContext(Dispatchers.IO) {
-                                                BossPetSettingsManager.setAnchor(anchor.first, anchor.second)
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                        ) { change, drag ->
-                            change.consume()
-                            val p = windowState.position
-                            if (p is WindowPosition.Absolute) {
-                                windowState.position =
-                                    WindowPosition(p.x + drag.x.toDp(), p.y + drag.y.toDp())
-                            }
-                        }
-                    }.pointerInput(Unit) {
                         detectTapGestures { BossPet.controller.dismissAnnouncement() }
                     },
             contentAlignment = Alignment.Center,
         ) {
             BossPetCard(mood, onHide)
+        }
+    }
+}
+
+@Composable
+private fun rememberPetDragModifier(windowState: WindowState): Modifier {
+    val saveScope = rememberCoroutineScope()
+    val saveMutex = remember { Mutex() }
+    return Modifier.pointerInput(Unit) {
+        detectDragGestures(
+            onDragEnd = {
+                val p = windowState.position
+                if (p is WindowPosition.Absolute) {
+                    val anchor =
+                        petPosition(
+                            p.x.value.roundToInt(),
+                            p.y.value.roundToInt(),
+                            connectedScreens(),
+                            PET_WIDTH,
+                            PET_HEIGHT,
+                        )
+                    windowState.position = WindowPosition(anchor.first.dp, anchor.second.dp)
+                    saveScope.launch { savePetAnchor(anchor, saveMutex) }
+                }
+            },
+        ) { change, drag ->
+            change.consume()
+            val p = windowState.position
+            if (p is WindowPosition.Absolute) {
+                windowState.position =
+                    WindowPosition(p.x + drag.x.toDp(), p.y + drag.y.toDp())
+            }
+        }
+    }
+}
+
+private suspend fun savePetAnchor(
+    anchor: Pair<Int, Int>,
+    mutex: Mutex,
+) {
+    mutex.withLock {
+        withContext(Dispatchers.IO) {
+            BossPetSettingsManager.setAnchor(anchor.first, anchor.second)
         }
     }
 }
