@@ -191,6 +191,13 @@ object BossOverlayHost {
      * "my dropdown doesn't open" into one diagnosable line. See [reportMissingPopupRenderer], whose
      * once-per-process shape this follows for the same reason.
      *
+     * This is a generic once-per-process signal, not a per-call-site diagnosis: a slow first
+     * anchor can consume the warning before a later broken popup appears.
+     *
+     * Host-only addition. The API-repo copy must not call this member without a minimum-host
+     * version gate: older hosts resolve their own copy first and do not provide this descriptor.
+     * The API copy deliberately omits both this member and its call for now.
+     *
      * A separate function rather than a parameter on an existing one: this surface is pinned by the
      * binary-compatibility validator in two repos, so adding a descriptor is free while changing one
      * costs a coordinated host and api release.

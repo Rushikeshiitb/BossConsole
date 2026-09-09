@@ -1,5 +1,6 @@
 package ai.rever.boss.plugin.ui
 
+import androidx.compose.material.Button
 import androidx.compose.material.Text
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
@@ -9,6 +10,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import org.junit.Rule
@@ -26,6 +28,26 @@ import kotlin.test.assertEquals
 class ScrimmedModalSemanticsTest {
     @get:Rule
     val rule = createComposeRule()
+
+    @Test
+    fun `card taps are swallowed while child buttons still receive taps`() {
+        var dismissed = 0
+        var pressed = 0
+        rule.setContent {
+            ScrimmedModalContent(true, { dismissed++ }) {
+                androidx.compose.foundation.layout.Column {
+                    Text("Card background")
+                    Button(onClick = { pressed++ }) { Text("Action") }
+                }
+            }
+        }
+        rule.mainClock.advanceTimeBy(INPUT_ARM_DELAY_MS + 64)
+        rule.onNodeWithText("Card background").performTouchInput { click() }
+        assertEquals(0, dismissed)
+        rule.onNodeWithText("Action").performTouchInput { click() }
+        assertEquals(1, pressed)
+        assertEquals(0, dismissed)
+    }
 
     @Test
     fun `a scrim tap uses the current dismiss callback after recomposition`() {
@@ -60,8 +82,7 @@ class ScrimmedModalSemanticsTest {
         // path did not.
         dialogNode.assertExists("the modal card should carry dialog() semantics")
         // The click-swallow used clickable(onClick = {}), which gave the card an OnClick action.
-        // The swallow is a
-        // bare detectTapGestures now, which adds no semantics.
+        // The bare detectTapGestures swallow adds no semantics.
         dialogNode.assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnClick))
     }
 }

@@ -169,7 +169,7 @@ private const val ANCHOR_MEASURE_TIMEOUT_MS = 500L
  * [anchorMeasured] is a lambda, not a snapshot value, precisely so the effect re-reads it after the
  * delay rather than capturing the always-null first-frame value. Extracted from [BossPopup] so these
  * branches do not count against that composable's cyclomatic complexity, and routed through
- * [BossOverlayHost.reportUnmeasuredAnchor] so a flapping anchor logs once, not per failure.
+ * [BossOverlayHost.reportUnmeasuredAnchor] so the process emits one generic warning, not one per popup or failure.
  */
 @Composable
 private fun UnmeasuredAnchorDiagnostic(
@@ -198,7 +198,7 @@ internal fun shouldArmModalInput(pointerDown: Boolean): Boolean = !pointerDown
 /**
  * Full-window scrim with the card centered on it.
  *
- * The card carries a no-op click handler so a click inside it is consumed rather than falling
+ * The card carries a pointer-input consumer so a click inside it is consumed rather than falling
  * through to the scrim and dismissing the dialog the user is filling in.
  *
  * **Input is refused until the pointer is known to be idle**, which is not belt-and-braces: a
@@ -267,7 +267,7 @@ internal fun ScrimmedModalContent(
                         // A tap via pointerInput, NOT `clickable`. `clickable` installs a focusable
                         // node carrying an OnClick action, and the card inside declares dialog()
                         // semantics - which Compose refuses to merge under a clickable/focusable
-                        // ancestor ("a dialog should not be a child of a clickable node"), crashing
+                        // ancestor (a dialog cannot merge into a clickable node), crashing
                         // the whole modal. detectTapGestures dismisses on a background tap while
                         // adding no semantics node, so the card's dialog() has no clickable ancestor.
                         // A tap on the card is consumed by the card's own swallow before it reaches
@@ -513,10 +513,7 @@ fun BossPopup(
                 // sees the node as the PARENT sees it - correct position, zero size - and the width
                 // comes from the measurement captured within.
                 .onGloballyPositioned { coordinates ->
-                    // Explicitly skip equal measurements. mutableStateOf already uses structural
-                    // equality, so this does not change snapshot invalidation semantics.
-                    val next = coordinates.positionInWindow()
-                    if (next != anchorPositionPx) anchorPositionPx = next
+                    anchorPositionPx = coordinates.positionInWindow()
                 }.layout { measurable, constraints ->
                     val placeable = measurable.measure(constraints)
                     // The CONSTRAINT, not the placeable. On the heavyweight path this Box has no
@@ -524,10 +521,10 @@ fun BossPopup(
                     // the anchor would report no width at all. maxWidth is what the caller is
                     // offering, which is the width the popup should adopt. Unbounded (a scrolling
                     // parent) has no such answer, so fall back to whatever the content measured.
-                    val nextWidth =
+                    // Structural equality already suppresses unchanged writes. An explicit read
+                    // here would subscribe measurement to the state it writes.
+                    measuredWidthPx =
                         if (constraints.hasBoundedWidth) constraints.maxWidth else placeable.width
-                    // Avoid invoking the setter when the measured width is unchanged.
-                    if (nextWidth != measuredWidthPx) measuredWidthPx = nextWidth
                     // Report 0x0 but still PLACE the child: the lightweight path nests a real Popup
                     // in here, and an unplaced subtree would never compose it.
                     layout(0, 0) { placeable.place(0, 0) }
