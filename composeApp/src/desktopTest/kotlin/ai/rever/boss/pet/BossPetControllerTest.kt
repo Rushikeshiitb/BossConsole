@@ -76,7 +76,7 @@ class BossPetControllerTest {
         val c = controller()
         c.taskStarted("a")
         c.taskFinished("a", "Done")
-        c.taskFinished("a", "Done again")
+        c.taskFinished("a", "Done")
         c.dismissAnnouncement()
         assertEquals(BossPetMood.Idle, c.mood.value)
     }

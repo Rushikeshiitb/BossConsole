@@ -46,4 +46,16 @@ class BossPetUpdateStateTest {
         controller.onIdleTimeout()
         assertEquals(BossPetMood.Failed("Update failed", "app-update", 1), controller.mood.value)
     }
+
+    @Test
+    fun `restart notice survives even if the state flow skipped installing`() {
+        val controller = BossPetController()
+        reportPetUpdateState(controller, UpdateState.ReadyToInstall("/tmp/update"))
+        reportPetUpdateState(controller, UpdateState.RestartRequired)
+        controller.onIdleTimeout()
+        assertEquals(
+            BossPetMood.Completed("Update installed - restart BOSS", "app-update", 1),
+            controller.mood.value,
+        )
+    }
 }
