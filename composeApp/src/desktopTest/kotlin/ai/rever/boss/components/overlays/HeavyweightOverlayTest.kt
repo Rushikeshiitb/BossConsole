@@ -5,6 +5,7 @@ import ai.rever.boss.plugin.browser.pointerInsideBounds
 import ai.rever.boss.plugin.browser.shouldAllowPinch
 import ai.rever.boss.plugin.browser.shouldRetainSurface
 import ai.rever.boss.plugin.ui.BossOverlayHost
+import ai.rever.boss.testsupport.repoRoot
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.unit.IntOffset
@@ -359,7 +360,7 @@ class HeavyweightOverlayTest {
 
     @Test
     fun `destructive dialogs retain their dismissal policy around BossDialog`() {
-        val root = ai.rever.boss.testsupport.repoRoot()
+        val root = repoRoot()
         listOf(
             "performance/MemoryPressureNoticeDialog.kt",
             "plugin/browser/ScreenCapturePickerDialog.kt",
