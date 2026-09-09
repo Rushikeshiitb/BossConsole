@@ -160,7 +160,10 @@ private suspend fun savePetAnchor(
  */
 @Composable
 fun BossPetUpdateBridge() {
-    val mood = BossPet.controller.mood.collectAsState().value
+    val mood =
+        BossPet.controller.mood
+            .collectAsState()
+            .value
     // A completed announcement fades back to idle on its own after a beat; a failure never does
     // (see BossPetController.onIdleTimeout), so the user cannot miss it by looking away.
     LaunchedEffect(mood) {
