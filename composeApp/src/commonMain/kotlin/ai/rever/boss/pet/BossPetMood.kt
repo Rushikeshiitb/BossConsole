@@ -32,6 +32,7 @@ sealed interface BossPetMood {
         val label: String,
         val taskId: String,
         val sequence: Long = 0,
+        val requiresAcknowledgement: Boolean = false,
     ) : BossPetMood
 
     /**
@@ -43,5 +44,6 @@ sealed interface BossPetMood {
         val label: String,
         val taskId: String,
         val sequence: Long = 0,
+        val occurrences: Long = 1,
     ) : BossPetMood
 }

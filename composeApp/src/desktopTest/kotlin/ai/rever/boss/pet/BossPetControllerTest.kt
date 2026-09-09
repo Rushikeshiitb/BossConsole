@@ -210,6 +210,7 @@ class BossPetControllerTest {
             c.taskStarted("update")
             c.taskFailed("update", "Update failed")
         }
+        assertEquals(BossPetMood.Failed("Update failed", "update", occurrences = 500), c.mood.value)
         c.dismissAnnouncement()
         assertEquals(BossPetMood.Idle, c.mood.value)
     }
@@ -225,5 +226,21 @@ class BossPetControllerTest {
         )
         c.dismissAnnouncement()
         assertEquals(BossPetMood.Idle, c.mood.value)
+    }
+
+    @Test
+    fun `overflow keeps its chronological aggregate until acknowledged then restores detail`() {
+        val c = controller()
+        repeat(128) { c.taskFailed("task-$it", "Failed $it") }
+        repeat(100) { c.dismissAnnouncement() }
+        c.taskFailed("later", "Later failure")
+        repeat(27) { c.dismissAnnouncement() }
+        assertEquals(
+            BossPetMood.Failed("2 additional results - check BOSS", "pet-overflow", -1),
+            c.mood.value,
+        )
+        c.dismissAnnouncement()
+        c.taskFailed("new", "New failure")
+        assertEquals("New failure", (c.mood.value as BossPetMood.Failed).label)
     }
 }

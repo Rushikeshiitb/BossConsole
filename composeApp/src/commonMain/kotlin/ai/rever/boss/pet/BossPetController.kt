@@ -7,7 +7,8 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * App-global task bookkeeping. Unacknowledged results are ordered by arrival and carry their task id,
  * so another task starting or finishing cannot erase a failure or misattribute a completion.
- * Producers must use distinct ids for concurrent tasks. Reusing an id starts a new run.
+ * Producers must use distinct ids for concurrent tasks. Successful runs retain separate notices;
+ * identical pending failures coalesce across runs and record their occurrence count.
  */
 class BossPetController {
     private val activeTasks = mutableSetOf<String>()
@@ -27,10 +28,11 @@ class BossPetController {
     fun taskFinished(
         id: String,
         label: String,
+        requiresAcknowledgement: Boolean = false,
     ) {
         if (!activeTasks.remove(id) && hasAnnouncement(id, label, failure = false)) return
         val sequence = nextAnnouncement++
-        enqueue(sequence, BossPetMood.Completed(label, id, sequence))
+        enqueue(sequence, BossPetMood.Completed(label, id, sequence, requiresAcknowledgement))
         publish()
     }
 
@@ -40,7 +42,14 @@ class BossPetController {
         label: String,
     ) {
         activeTasks.remove(id)
-        if (hasAnnouncement(id, label, failure = true)) {
+        val existing =
+            announcements.entries.firstOrNull {
+                val notice = it.value
+                notice is BossPetMood.Failed && notice.taskId == id && notice.label == label
+            }
+        if (existing != null) {
+            val notice = existing.value as BossPetMood.Failed
+            existing.setValue(notice.copy(occurrences = notice.occurrences + 1))
             publish()
             return
         }
@@ -81,7 +90,9 @@ class BossPetController {
     /** Advance successes even while other tasks run. Failures require explicit acknowledgement. */
     @Synchronized
     fun onIdleTimeout(expected: BossPetMood = _mood.value) {
-        if (expected is BossPetMood.Completed && _mood.value == expected) dismissAnnouncement()
+        if (expected is BossPetMood.Completed && !expected.requiresAcknowledgement && _mood.value == expected) {
+            dismissAnnouncement()
+        }
     }
 
     private fun enqueue(

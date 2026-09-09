@@ -1,7 +1,6 @@
 package ai.rever.boss.pet
 
 import ai.rever.boss.config.BossPetSettingsManager
-import ai.rever.boss.updater.UpdateManager
 import ai.rever.boss.window.ApplyBossWindowIcon
 import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.animation.core.RepeatMode
@@ -24,7 +23,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -47,8 +45,6 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -61,7 +57,7 @@ import kotlin.math.roundToInt
  *
  * Mounted once from `main.kt`'s `application {}` scope, guarded by [BossPetSettingsManager], so it is
  * app-global rather than per-window and never appears unless the user has opted in. It renders
- * [BossPet]'s controller and is driven by whatever calls that controller; [BossPetUpdateBridge] wires
+ * [BossPet]'s controller and is driven by whatever calls that controller; [BossPetHost] wires
  * one real producer (the app updater) as a worked example, read-only.
  *
  * **Fixed palette, not [ai.rever.boss.plugin.ui.BossColors].** Those resolve through a CompositionLocal
@@ -112,22 +108,24 @@ private fun rememberPetDragModifier(windowState: WindowState): Modifier {
     val saveScope = rememberCoroutineScope()
     val saveMutex = remember { Mutex() }
     return Modifier.pointerInput(Unit) {
+        val finishDrag: () -> Unit = {
+            val p = windowState.position
+            if (p is WindowPosition.Absolute) {
+                val anchor =
+                    petPosition(
+                        p.x.value.roundToInt(),
+                        p.y.value.roundToInt(),
+                        connectedPetScreens(),
+                        PET_WIDTH,
+                        PET_HEIGHT,
+                    )
+                windowState.position = WindowPosition(anchor.first.dp, anchor.second.dp)
+                saveScope.launch { savePetAnchor(anchor, saveMutex) }
+            }
+        }
         detectDragGestures(
-            onDragEnd = {
-                val p = windowState.position
-                if (p is WindowPosition.Absolute) {
-                    val anchor =
-                        petPosition(
-                            p.x.value.roundToInt(),
-                            p.y.value.roundToInt(),
-                            connectedPetScreens(),
-                            PET_WIDTH,
-                            PET_HEIGHT,
-                        )
-                    windowState.position = WindowPosition(anchor.first.dp, anchor.second.dp)
-                    saveScope.launch { savePetAnchor(anchor, saveMutex) }
-                }
-            },
+            onDragEnd = finishDrag,
+            onDragCancel = finishDrag,
         ) { change, drag ->
             change.consume()
             val p = windowState.position
@@ -146,36 +144,6 @@ private suspend fun savePetAnchor(
     mutex.withLock {
         withContext(Dispatchers.IO) {
             BossPetSettingsManager.setAnchor(anchor.first, anchor.second)
-        }
-    }
-}
-
-/**
- * Translates the app updater's state into pet activity, read-only.
- *
- * A worked example of the intended integration - a real long-running host action driving the pet -
- * that touches nothing in the updater: it only observes [UpdateManager.updateState]. The task id is a
- * constant so the download, the install and the ready state are all one task to the pet rather than
- * three. Other producers (agents, builds, plugin installs) call [BossPet]'s controller the same way.
- */
-@Composable
-fun BossPetUpdateBridge() {
-    val mood =
-        BossPet.controller.mood
-            .collectAsState()
-            .value
-    // A completed announcement fades back to idle on its own after a beat; a failure never does
-    // (see BossPetController.onIdleTimeout), so the user cannot miss it by looking away.
-    LaunchedEffect(mood) {
-        if (mood is BossPetMood.Completed) {
-            delay(AUTO_IDLE_MS)
-            BossPet.controller.onIdleTimeout(mood)
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        UpdateManager.instance.updateState.collect { state ->
-            reportPetUpdateState(BossPet.controller, state)
         }
     }
 }
@@ -212,15 +180,16 @@ private fun BossPetCard(
                 modifier = Modifier.weight(1f),
             )
         }
-        Text(
-            text = "×",
-            color = TEXT,
+        Box(
             modifier =
                 Modifier
+                    .size(24.dp)
                     .semantics { contentDescription = "Hide pet until restart" }
-                    .clickable(onClick = onHide)
-                    .padding(4.dp),
-        )
+                    .clickable(onClick = onHide),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text = "×", color = TEXT)
+        }
     }
 }
 
@@ -283,7 +252,7 @@ private fun labelFor(mood: BossPetMood): String? =
         is BossPetMood.Idle -> null
         is BossPetMood.Working -> if (mood.activeCount > 1) "Working - ${mood.activeCount} tasks" else "Working..."
         is BossPetMood.Completed -> mood.label
-        is BossPetMood.Failed -> mood.label
+        is BossPetMood.Failed -> if (mood.occurrences > 1) "${mood.occurrences}× ${mood.label}" else mood.label
     }
 
 /** Restore on a connected display, falling back to the primary display after monitor removal. */
@@ -294,7 +263,6 @@ private fun initialPosition(): Pair<Int, Int> {
 
 private const val PET_WIDTH = 220
 private const val PET_HEIGHT = 56
-private const val AUTO_IDLE_MS = 6_000L
 
 private val CARD_BG = Color(0xF01B1D22)
 private val TEXT = Color(0xFFE8EAED)
