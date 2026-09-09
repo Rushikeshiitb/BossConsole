@@ -18,6 +18,7 @@ import ai.rever.boss.crash.hasFatalCause
 import ai.rever.boss.crash.noteRecoveryOutcome
 import ai.rever.boss.logging.GlobalLogCapture
 import ai.rever.boss.performance.PerformanceDataProviderImpl
+import ai.rever.boss.pet.BossPetUpdateBridge
 import ai.rever.boss.pet.BossPetWindow
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.pathutils.BossDirectories
@@ -1291,8 +1292,10 @@ fun main(args: Array<String>) {
                 // BOSS_PET in the environment overrides the stored value.
                 val petSettings by BossPetSettingsManager.settings.collectAsState()
                 val petEnabled = remember(petSettings) { BossPetSettingsManager.isEnabled() }
-                if (petEnabled) {
-                    BossPetWindow()
+                var petHidden by remember { mutableStateOf(false) }
+                BossPetUpdateBridge()
+                if (petEnabled && !petHidden) {
+                    BossPetWindow(onHide = { petHidden = true })
                 }
             }
         } // CompositionLocalProvider

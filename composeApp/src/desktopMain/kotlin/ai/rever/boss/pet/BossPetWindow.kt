@@ -8,6 +8,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -25,20 +26,30 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.awt.GraphicsEnvironment
 import kotlin.math.roundToInt
 
@@ -57,11 +68,11 @@ import kotlin.math.roundToInt
  * the same reason.
  */
 @Composable
-fun BossPetWindow() {
+fun BossPetWindow(onHide: () -> Unit) {
     val mood by BossPet.controller.mood.collectAsState()
 
-    BossPetUpdateBridge()
-
+    val saveScope = rememberCoroutineScope()
+    val saveMutex = remember { Mutex() }
     val initial = remember { initialPosition() }
     val windowState =
         rememberWindowState(
@@ -69,17 +80,8 @@ fun BossPetWindow() {
             position = WindowPosition(initial.first.dp, initial.second.dp),
         )
 
-    // A completed announcement fades back to idle on its own after a beat; a failure never does
-    // (see BossPetController.onIdleTimeout), so the user cannot miss it by looking away.
-    LaunchedEffect(mood) {
-        if (mood is BossPetMood.Completed) {
-            kotlinx.coroutines.delay(AUTO_IDLE_MS)
-            BossPet.controller.onIdleTimeout(mood)
-        }
-    }
-
     Window(
-        onCloseRequest = {},
+        onCloseRequest = onHide,
         state = windowState,
         undecorated = true,
         transparent = true,
@@ -100,7 +102,22 @@ fun BossPetWindow() {
                             onDragEnd = {
                                 val p = windowState.position
                                 if (p is WindowPosition.Absolute) {
-                                    BossPetSettingsManager.setAnchor(p.x.value.roundToInt(), p.y.value.roundToInt())
+                                    val anchor =
+                                        petPosition(
+                                            p.x.value.roundToInt(),
+                                            p.y.value.roundToInt(),
+                                            connectedScreens(),
+                                            PET_WIDTH,
+                                            PET_HEIGHT,
+                                        )
+                                    windowState.position = WindowPosition(anchor.first.dp, anchor.second.dp)
+                                    saveScope.launch {
+                                        saveMutex.withLock {
+                                            withContext(Dispatchers.IO) {
+                                                BossPetSettingsManager.setAnchor(anchor.first, anchor.second)
+                                            }
+                                        }
+                                    }
                                 }
                             },
                         ) { change, drag ->
@@ -116,7 +133,7 @@ fun BossPetWindow() {
                     },
             contentAlignment = Alignment.Center,
         ) {
-            BossPetCard(mood)
+            BossPetCard(mood, onHide)
         }
     }
 }
@@ -130,9 +147,19 @@ fun BossPetWindow() {
  * three. Other producers (agents, builds, plugin installs) call [BossPet]'s controller the same way.
  */
 @Composable
-private fun BossPetUpdateBridge() {
+fun BossPetUpdateBridge() {
+    val mood by BossPet.controller.mood.collectAsState()
+    // A completed announcement fades back to idle on its own after a beat; a failure never does
+    // (see BossPetController.onIdleTimeout), so the user cannot miss it by looking away.
+    LaunchedEffect(mood) {
+        if (mood is BossPetMood.Completed) {
+            delay(AUTO_IDLE_MS)
+            BossPet.controller.onIdleTimeout(mood)
+        }
+    }
+
     LaunchedEffect(Unit) {
-        UpdateManager.instance.updateState.collectLatest { state ->
+        UpdateManager.instance.updateState.collect { state ->
             reportPetUpdateState(BossPet.controller, state)
         }
     }
@@ -140,7 +167,10 @@ private fun BossPetUpdateBridge() {
 
 /** The pet's face and message for [mood]. Drag and click handling live on the hosting Box. */
 @Composable
-private fun BossPetCard(mood: BossPetMood) {
+private fun BossPetCard(
+    mood: BossPetMood,
+    onHide: () -> Unit,
+) {
     val glyph = glyphFor(mood)
     val accent = accentFor(mood)
     val label = labelFor(mood)
@@ -162,8 +192,20 @@ private fun BossPetCard(mood: BossPetMood) {
                 color = TEXT,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
         }
+        Text(
+            text = "×",
+            color = TEXT,
+            modifier =
+                Modifier
+                    .semantics { contentDescription = "Hide pet until restart" }
+                    .clickable(onClick = onHide)
+                    .padding(4.dp),
+        )
     }
 }
 
@@ -232,15 +274,16 @@ private fun labelFor(mood: BossPetMood): String? =
 /** Restore on a connected display, falling back to the primary display after monitor removal. */
 private fun initialPosition(): Pair<Int, Int> {
     val saved = BossPetSettingsManager.settings.value
-    val screens =
-        runCatching {
-            val environment = GraphicsEnvironment.getLocalGraphicsEnvironment()
-            val primary = environment.defaultScreenDevice
-            (listOf(primary) + environment.screenDevices.filter { it != primary })
-                .map { it.defaultConfiguration.bounds }
-        }.getOrDefault(emptyList())
-    return petPosition(saved.anchorX, saved.anchorY, screens, PET_WIDTH, PET_HEIGHT)
+    return petPosition(saved.anchorX, saved.anchorY, connectedScreens(), PET_WIDTH, PET_HEIGHT)
 }
+
+private fun connectedScreens(): List<java.awt.Rectangle> =
+    runCatching {
+        val environment = GraphicsEnvironment.getLocalGraphicsEnvironment()
+        val primary = environment.defaultScreenDevice
+        (listOf(primary) + environment.screenDevices.filter { it != primary })
+            .map { it.defaultConfiguration.bounds }
+    }.getOrDefault(emptyList())
 
 private const val PET_WIDTH = 220
 private const val PET_HEIGHT = 56

@@ -13,6 +13,7 @@ class BossPetController {
     private val activeTasks = mutableSetOf<String>()
     private val announcements = linkedMapOf<Long, BossPetMood>()
     private var nextAnnouncement = 0L
+    private var overflowCount = 0L
     private val _mood = MutableStateFlow<BossPetMood>(BossPetMood.Idle)
     val mood: StateFlow<BossPetMood> = _mood.asStateFlow()
 
@@ -29,7 +30,7 @@ class BossPetController {
     ) {
         if (!activeTasks.remove(id) && hasAnnouncement(id, label, failure = false)) return
         val sequence = nextAnnouncement++
-        announcements[sequence] = BossPetMood.Completed(label, id, sequence)
+        enqueue(sequence, BossPetMood.Completed(label, id, sequence))
         publish()
     }
 
@@ -38,9 +39,13 @@ class BossPetController {
         id: String,
         label: String,
     ) {
-        if (!activeTasks.remove(id) && hasAnnouncement(id, label, failure = true)) return
+        activeTasks.remove(id)
+        if (hasAnnouncement(id, label, failure = true)) {
+            publish()
+            return
+        }
         val sequence = nextAnnouncement++
-        announcements[sequence] = BossPetMood.Failed(label, id, sequence)
+        enqueue(sequence, BossPetMood.Failed(label, id, sequence))
         publish()
     }
 
@@ -51,9 +56,25 @@ class BossPetController {
         publish()
     }
 
+    /** Retract an obsolete success without acknowledging failures or other tasks' results. */
+    @Synchronized
+    fun retractCompletion(
+        id: String,
+        label: String,
+    ) {
+        announcements.entries.removeAll {
+            val notice = it.value
+            notice is BossPetMood.Completed && notice.taskId == id && notice.label == label
+        }
+        publish()
+    }
+
     @Synchronized
     fun dismissAnnouncement() {
-        announcements.keys.firstOrNull()?.let { announcements.remove(it) }
+        announcements.keys.firstOrNull()?.let {
+            announcements.remove(it)
+            if (it == OVERFLOW_KEY) overflowCount = 0
+        }
         publish()
     }
 
@@ -61,6 +82,21 @@ class BossPetController {
     @Synchronized
     fun onIdleTimeout(expected: BossPetMood = _mood.value) {
         if (expected is BossPetMood.Completed && _mood.value == expected) dismissAnnouncement()
+    }
+
+    private fun enqueue(
+        sequence: Long,
+        notice: BossPetMood,
+    ) {
+        // Reserve one of 128 slots for an explicit overflow warning rather than growing forever
+        // behind an unacknowledged failure. The warning counts results whose details were omitted.
+        if (announcements.size >= 127 || overflowCount > 0) {
+            overflowCount++
+            announcements[OVERFLOW_KEY] =
+                BossPetMood.Failed("$overflowCount additional results - check BOSS", "pet-overflow", OVERFLOW_KEY)
+        } else {
+            announcements[sequence] = notice
+        }
     }
 
     private fun hasAnnouncement(
@@ -82,3 +118,5 @@ class BossPetController {
                 ?: if (activeTasks.isEmpty()) BossPetMood.Idle else BossPetMood.Working(activeTasks.size)
     }
 }
+
+private const val OVERFLOW_KEY = -1L

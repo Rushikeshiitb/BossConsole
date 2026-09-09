@@ -52,10 +52,20 @@ class BossPetUpdateStateTest {
         val controller = BossPetController()
         reportPetUpdateState(controller, UpdateState.ReadyToInstall("/tmp/update"))
         reportPetUpdateState(controller, UpdateState.RestartRequired)
-        controller.onIdleTimeout()
         assertEquals(
             BossPetMood.Completed("Update installed - restart BOSS", "app-update", 1),
             controller.mood.value,
         )
+    }
+
+    @Test
+    fun `discarding a ready update retracts only that success`() {
+        val controller = BossPetController()
+        controller.taskFailed("build", "Build failed")
+        reportPetUpdateState(controller, UpdateState.ReadyToInstall("/tmp/update"))
+        reportPetUpdateState(controller, UpdateState.Idle)
+        assertEquals(BossPetMood.Failed("Build failed", "build"), controller.mood.value)
+        controller.dismissAnnouncement()
+        assertEquals(BossPetMood.Idle, controller.mood.value)
     }
 }

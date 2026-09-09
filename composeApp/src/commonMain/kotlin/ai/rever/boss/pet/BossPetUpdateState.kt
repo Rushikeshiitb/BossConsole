@@ -7,6 +7,9 @@ internal fun reportPetUpdateState(
     controller: BossPetController,
     state: UpdateState,
 ) {
+    if (state !is UpdateState.ReadyToInstall && state !is UpdateState.Downloading) {
+        controller.retractCompletion(UPDATE_TASK_ID, "Update ready to install")
+    }
     when (state) {
         is UpdateState.CheckingForUpdates,
         is UpdateState.Downloading,

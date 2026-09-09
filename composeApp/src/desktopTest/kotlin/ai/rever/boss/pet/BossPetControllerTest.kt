@@ -202,4 +202,28 @@ class BossPetControllerTest {
         c.onIdleTimeout(firstNotice)
         assertEquals(BossPetMood.Completed("Done", "b", 1), c.mood.value)
     }
+
+    @Test
+    fun `repeated failing checks need only one acknowledgement`() {
+        val c = controller()
+        repeat(500) {
+            c.taskStarted("update")
+            c.taskFailed("update", "Update failed")
+        }
+        c.dismissAnnouncement()
+        assertEquals(BossPetMood.Idle, c.mood.value)
+    }
+
+    @Test
+    fun `a blocked queue has bounded detail and an explicit overflow count`() {
+        val c = controller()
+        repeat(500) { c.taskFailed("task-$it", "Failed $it") }
+        repeat(127) { c.dismissAnnouncement() }
+        assertEquals(
+            BossPetMood.Failed("373 additional results - check BOSS", "pet-overflow", -1),
+            c.mood.value,
+        )
+        c.dismissAnnouncement()
+        assertEquals(BossPetMood.Idle, c.mood.value)
+    }
 }
