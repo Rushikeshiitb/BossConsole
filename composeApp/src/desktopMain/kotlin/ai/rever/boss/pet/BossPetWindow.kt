@@ -74,7 +74,7 @@ fun BossPetWindow() {
     LaunchedEffect(mood) {
         if (mood is BossPetMood.Completed) {
             kotlinx.coroutines.delay(AUTO_IDLE_MS)
-            BossPet.controller.onIdleTimeout()
+            BossPet.controller.onIdleTimeout(mood)
         }
     }
 

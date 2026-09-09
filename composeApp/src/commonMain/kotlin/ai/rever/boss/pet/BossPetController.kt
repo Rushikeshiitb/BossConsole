@@ -59,8 +59,8 @@ class BossPetController {
 
     /** Advance successes even while other tasks run. Failures require explicit acknowledgement. */
     @Synchronized
-    fun onIdleTimeout() {
-        if (_mood.value is BossPetMood.Completed) dismissAnnouncement()
+    fun onIdleTimeout(expected: BossPetMood = _mood.value) {
+        if (expected is BossPetMood.Completed && _mood.value == expected) dismissAnnouncement()
     }
 
     private fun hasAnnouncement(

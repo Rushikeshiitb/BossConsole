@@ -191,4 +191,15 @@ class BossPetControllerTest {
         c.onIdleTimeout()
         assertEquals(BossPetMood.Idle, c.mood.value)
     }
+
+    @Test
+    fun `a stale timer cannot acknowledge the next task result`() {
+        val c = controller()
+        c.taskFinished("a", "Done")
+        val firstNotice = c.mood.value
+        c.taskFinished("b", "Done")
+        c.dismissAnnouncement()
+        c.onIdleTimeout(firstNotice)
+        assertEquals(BossPetMood.Completed("Done", "b", 1), c.mood.value)
+    }
 }
