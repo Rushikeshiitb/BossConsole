@@ -1,0 +1,147 @@
+package ai.rever.boss.pet
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+/**
+ * Pins every transition of [BossPetController], the state machine the floating pet renders.
+ *
+ * The controller is deliberately free of Compose and timers so these can drive it by calls alone.
+ * The cases that matter most are the ones that would otherwise strand the pet: a double-finish that
+ * must not drive the count negative, a failure that must survive the idle timer, and a dismiss that
+ * must return to Working rather than Idle while work is still in flight.
+ */
+class BossPetControllerTest {
+    private fun controller() = BossPetController()
+
+    @Test
+    fun `starts idle`() {
+        assertEquals(BossPetMood.Idle, controller().mood.value)
+    }
+
+    @Test
+    fun `one task started shows working with a count of one`() {
+        val c = controller()
+        c.taskStarted("a")
+        assertEquals(BossPetMood.Working(1), c.mood.value)
+    }
+
+    @Test
+    fun `concurrent tasks are counted`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskStarted("b")
+        assertEquals(BossPetMood.Working(2), c.mood.value)
+    }
+
+    @Test
+    fun `starting the same id twice does not double-count`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskStarted("a")
+        assertEquals(BossPetMood.Working(1), c.mood.value)
+    }
+
+    @Test
+    fun `finishing the only task announces completion`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskFinished("a", "Build finished")
+        assertEquals(BossPetMood.Completed("Build finished"), c.mood.value)
+    }
+
+    @Test
+    fun `finishing one of several keeps announcing but work remains underneath`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskStarted("b")
+        c.taskFinished("a", "Agent finished")
+        assertEquals(BossPetMood.Completed("Agent finished"), c.mood.value)
+        // Dismissing the announcement must fall back to the still-running task, not to idle.
+        c.dismissAnnouncement()
+        assertEquals(BossPetMood.Working(1), c.mood.value)
+    }
+
+    @Test
+    fun `finishing an id that was never started still announces and never goes negative`() {
+        val c = controller()
+        c.taskFinished("ghost", "Done")
+        assertEquals(BossPetMood.Completed("Done"), c.mood.value)
+        c.dismissAnnouncement()
+        assertEquals(BossPetMood.Idle, c.mood.value)
+    }
+
+    @Test
+    fun `finishing the same id twice does not strand the pet in working`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskFinished("a", "Done")
+        c.taskFinished("a", "Done again")
+        c.dismissAnnouncement()
+        assertEquals(BossPetMood.Idle, c.mood.value)
+    }
+
+    @Test
+    fun `a failure is announced`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskFailed("a", "Build failed")
+        assertEquals(BossPetMood.Failed("Build failed"), c.mood.value)
+    }
+
+    @Test
+    fun `the idle timeout clears a completion but never a failure`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskFinished("a", "Done")
+        c.onIdleTimeout()
+        assertEquals(BossPetMood.Idle, c.mood.value)
+
+        val f = controller()
+        f.taskStarted("b")
+        f.taskFailed("b", "Boom")
+        f.onIdleTimeout()
+        assertEquals(BossPetMood.Failed("Boom"), f.mood.value)
+    }
+
+    @Test
+    fun `the idle timeout leaves live work alone`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.onIdleTimeout()
+        assertEquals(BossPetMood.Working(1), c.mood.value)
+    }
+
+    @Test
+    fun `the idle timeout does not clear a completion while other work is still running`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskStarted("b")
+        c.taskFinished("a", "One done")
+        c.onIdleTimeout()
+        // Still Completed: there is live work, so this was not a success the user has had time to
+        // see in an idle window.
+        assertEquals(BossPetMood.Completed("One done"), c.mood.value)
+    }
+
+    @Test
+    fun `dismiss is a no-op while idle or working`() {
+        val c = controller()
+        c.dismissAnnouncement()
+        assertEquals(BossPetMood.Idle, c.mood.value)
+        c.taskStarted("a")
+        c.dismissAnnouncement()
+        assertEquals(BossPetMood.Working(1), c.mood.value)
+    }
+
+    @Test
+    fun `new work overrides a standing announcement`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskFinished("a", "Done")
+        assertTrue(c.mood.value is BossPetMood.Completed)
+        c.taskStarted("b")
+        assertEquals(BossPetMood.Working(1), c.mood.value)
+    }
+}

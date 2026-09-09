@@ -6,6 +6,7 @@ import ai.rever.boss.cli.createBossCLI
 import ai.rever.boss.components.bars.horizontal.StatusMessageManager
 import ai.rever.boss.components.dialogs.ChromiumDownloadContent
 import ai.rever.boss.components.settings.search.SettingsSearchIndex
+import ai.rever.boss.config.BossPetSettingsManager
 import ai.rever.boss.config.ChromiumAutoDownloader
 import ai.rever.boss.crash.CrashHandler
 import ai.rever.boss.crash.RENDER_RECOVERY_TOAST_MILLIS
@@ -17,6 +18,7 @@ import ai.rever.boss.crash.hasFatalCause
 import ai.rever.boss.crash.noteRecoveryOutcome
 import ai.rever.boss.logging.GlobalLogCapture
 import ai.rever.boss.performance.PerformanceDataProviderImpl
+import ai.rever.boss.pet.BossPetWindow
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashInterceptor
@@ -43,6 +45,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -1258,6 +1261,17 @@ fun main(args: Array<String>) {
                             },
                         )
                     }
+                }
+
+                // Floating BOSS pet (#386): an app-global companion that shows what agents and
+                // long-running actions are doing. Off unless the user opts in - a floating,
+                // always-on-top window must not appear unasked - so the default desktop is
+                // unchanged. Reactive to the setting so a toggle takes effect without a restart;
+                // BOSS_PET in the environment overrides the stored value.
+                val petSettings by BossPetSettingsManager.settings.collectAsState()
+                val petEnabled = remember(petSettings) { BossPetSettingsManager.isEnabled() }
+                if (petEnabled) {
+                    BossPetWindow()
                 }
             }
         } // CompositionLocalProvider
