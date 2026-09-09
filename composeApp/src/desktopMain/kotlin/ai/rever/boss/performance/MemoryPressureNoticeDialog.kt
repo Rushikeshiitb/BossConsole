@@ -21,6 +21,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -51,7 +52,10 @@ fun MemoryPressureNoticeDialog(onRestartRequested: () -> Unit) {
     // must not silently consume the one notice and its restart offer. Escape and the "Continue"
     // button still dismiss deliberately. See LocalDismissModalOnFocusLoss and issue #152.
     CompositionLocalProvider(LocalDismissModalOnFocusLoss provides false) {
-        BossDialog(onDismissRequest = { MemoryPressureWatchdog.acknowledge() }) {
+        BossDialog(
+            onDismissRequest = { MemoryPressureWatchdog.acknowledge() },
+            properties = DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = true),
+        ) {
             Column(
                 modifier =
                     Modifier

@@ -350,12 +350,28 @@ class HeavyweightOverlayTest {
     }
 
     @Test
-    fun `the opt-out is checked first, so a popup count cannot make an opted-out modal dismiss`() {
-        // dismissOnFocusLoss = false must win regardless of the other inputs: it is the strongest
-        // suppressor, checked before the popup count and the opposite-window test.
+    fun `the opt-out suppresses dismissal even with an open popup`() {
+        // dismissOnFocusLoss = false must win regardless of the other inputs.
         assertFalse(
             shouldDismissOnFocusLoss(dismissOnFocusLoss = false, openHeavyweightPopups = 1, oppositeWindow = null),
         )
+    }
+
+    @Test
+    fun `destructive dialogs retain their dismissal policy around BossDialog`() {
+        val root = ai.rever.boss.testsupport.repoRoot()
+        listOf(
+            "performance/MemoryPressureNoticeDialog.kt",
+            "plugin/browser/ScreenCapturePickerDialog.kt",
+        ).forEach { path ->
+            val source = root.resolve("composeApp/src/desktopMain/kotlin/ai/rever/boss/$path").readText()
+            assertTrue(
+                Regex("CompositionLocalProvider\\(LocalDismissModalOnFocusLoss provides false\\)\\s*\\{\\s*BossDialog\\(")
+                    .containsMatchIn(source),
+                "$path must opt the whole dialog out of focus-loss dismissal",
+            )
+            assertTrue(source.contains("dismissOnClickOutside = false"), "$path must not dismiss on a return click")
+        }
     }
 
     // --- overlay transparency diagnosis ---

@@ -60,12 +60,12 @@ fun ScreenCapturePickerDialog(
 
     // Opt out of focus-loss dismissal: onDismiss cancels the capture request. The picker lists the
     // app's windows, so "switch to the window I want to share, to check which one it is" is a real
-    // flow and must not silently kill the share. Escape, the X, the Cancel button and a click on the
-    // scrim still cancel deliberately. See LocalDismissModalOnFocusLoss and issue #152.
+    // flow and must not silently kill the share. Escape, the X and the Cancel button still cancel
+    // deliberately; clicking back onto the scrim does not. See LocalDismissModalOnFocusLoss and #152.
     CompositionLocalProvider(LocalDismissModalOnFocusLoss provides false) {
         BossDialog(
             onDismissRequest = onDismiss,
-            properties = DialogProperties(dismissOnClickOutside = true, dismissOnBackPress = true),
+            properties = DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = true),
         ) {
             Surface(
                 modifier = Modifier.width(500.dp).heightIn(min = 350.dp, max = 520.dp),
