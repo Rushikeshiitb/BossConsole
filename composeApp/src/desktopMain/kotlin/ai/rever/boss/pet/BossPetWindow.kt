@@ -38,9 +38,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
+import kotlinx.coroutines.flow.collectLatest
 import java.awt.GraphicsEnvironment
 import kotlin.math.roundToInt
-import kotlinx.coroutines.flow.collectLatest
 
 /**
  * The floating BOSS pet: a small, draggable, always-on-top companion that shows what the session's
@@ -236,7 +236,8 @@ private fun initialPosition(): Pair<Int, Int> {
         runCatching {
             val environment = GraphicsEnvironment.getLocalGraphicsEnvironment()
             val primary = environment.defaultScreenDevice
-            (listOf(primary) + environment.screenDevices.filter { it != primary }).map { it.defaultConfiguration.bounds }
+            (listOf(primary) + environment.screenDevices.filter { it != primary })
+                .map { it.defaultConfiguration.bounds }
         }.getOrDefault(emptyList())
     return petPosition(saved.anchorX, saved.anchorY, screens, PET_WIDTH, PET_HEIGHT)
 }

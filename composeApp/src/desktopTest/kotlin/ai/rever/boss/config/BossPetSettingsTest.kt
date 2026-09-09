@@ -1,11 +1,11 @@
 package ai.rever.boss.config
 
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.serialization.json.Json
 
 /**
  * Covers the two things about the pet setting that a bad value could break: how the on/off string is
@@ -57,7 +57,8 @@ class BossPetSettingsTest {
     @Test
     fun `settings round-trip through json`() {
         val original = BossPetSettings(enabled = true, anchorX = 120, anchorY = 40)
-        val decoded = json.decodeFromString<BossPetSettings>(json.encodeToString(BossPetSettings.serializer(), original))
+        val decoded =
+            json.decodeFromString<BossPetSettings>(json.encodeToString(BossPetSettings.serializer(), original))
         assertEquals(original, decoded)
     }
 
