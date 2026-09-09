@@ -2,6 +2,8 @@ package ai.rever.boss.pet
 
 import ai.rever.boss.config.BossPetSettingsManager
 import ai.rever.boss.updater.UpdateManager
+import ai.rever.boss.window.ApplyBossWindowIcon
+import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -88,7 +90,9 @@ fun BossPetWindow(onHide: () -> Unit) {
         focusable = false,
         resizable = false,
         title = "BOSS",
+        icon = BossWindowIcon.painter,
     ) {
+        ApplyBossWindowIcon(window)
         Box(
             modifier =
                 Modifier
@@ -258,10 +262,10 @@ private fun BossPetFace(
 
 private fun glyphFor(mood: BossPetMood): String =
     when (mood) {
-        is BossPetMood.Idle -> "🤖" // robot
-        is BossPetMood.Working -> "⚙️" // gear
-        is BossPetMood.Completed -> "✅" // check mark
-        is BossPetMood.Failed -> "⚠️" // warning
+        is BossPetMood.Idle -> "🤖"
+        is BossPetMood.Working -> "⚙️"
+        is BossPetMood.Completed -> "✅"
+        is BossPetMood.Failed -> "⚠️"
     }
 
 private fun accentFor(mood: BossPetMood): Color =
