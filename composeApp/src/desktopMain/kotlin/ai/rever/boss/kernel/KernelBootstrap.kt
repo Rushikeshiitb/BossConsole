@@ -107,19 +107,17 @@ private val reapLogger = LoggerFactory.getLogger("KernelReaper")
  * and decrementing on exit keeps the signal true until the last reap finishes, and returns it to
  * false afterwards so an in-process mode switch ([KernelBootstrap.shutdown]) can spawn again.
  */
-private val reapDepth =
-    java.util.concurrent.atomic
-        .AtomicInteger(0)
+// The same gate also protects plugin registration from racing the reap snapshot.
 
 /** Whether a reap is in progress. Recovery must not spawn anything while this is true. */
-internal fun isReaping(): Boolean = reapDepth.get() > 0
+internal fun isReaping(): Boolean = reapSpawnGate.isReaping()
 
 /**
  * Stop supervising children, then kill every registered one inside [gracePeriodMs] total.
  *
  * Supervision goes first because each kill below is indistinguishable from a crash to the monitor,
  * whose failure handler respawns - reaping while it still watches can hand an exiting host a fresh
- * generation of children to strand. [reaping] covers the in-flight remainder.
+ * generation of children to strand. [isReaping] covers the in-flight remainder.
  *
  * Kills are issued to everything up front and then awaited against a single deadline set *before*
  * the first one goes out, rather than destroy-then-wait per process. Per-process waiting made exit
@@ -140,7 +138,7 @@ internal fun reapChildren(
     registry: ProcessRegistry?,
     gracePeriodMs: Long = 3_000,
 ) {
-    reapDepth.incrementAndGet()
+    reapSpawnGate.beginReap()
     try {
         runCatching { monitor?.stopSupervision() }
 
@@ -174,13 +172,14 @@ internal fun reapChildren(
         // Children are dead, so nothing is going to answer on these. Close them without waiting.
         children.forEach { runCatching { it.ipcClient?.shutdown(timeoutMs = 0) } }
 
-        // Drop the reaped handles from the registry. Harmless at JVM exit, but shutdown() also runs
+        // Drop confirmed-dead handles, preserving live children if termination failed or is pending.
+        // Harmless at JVM exit, but shutdown() also runs
         // this for an in-process mode switch, where the registry is process-wide and outlives the
         // reap - stale dead entries would otherwise persist into the next generation. Keyed by
         // config.processId, which is exactly what ProcessSpawner.spawn registered them under.
-        children.forEach { runCatching { registry?.unregister(it.config.processId) } }
+        children.filterNot { it.isAlive }.forEach { runCatching { registry?.unregisterIfSame(it.config.processId, it) } }
     } finally {
-        reapDepth.decrementAndGet()
+        reapSpawnGate.endReap()
     }
 }
 

@@ -4,6 +4,7 @@ import ai.rever.boss.ipc.BossIpcClient
 import ai.rever.boss.ipc.IpcVersion
 import ai.rever.boss.kernel.KernelBootstrap
 import ai.rever.boss.kernel.isReaping
+import ai.rever.boss.kernel.reapSpawnGate
 import ai.rever.boss.plugin.api.PluginManifest
 import ai.rever.boss.plugin.loader.PluginManifestReader
 import ai.rever.boss.process.ManagedProcess
@@ -84,6 +85,7 @@ class OutOfProcessPluginSpawnerImpl(
     ): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
+                val spawnGeneration = reapSpawnGate.generation()
                 val pluginId = manifest.pluginId
 
                 // Stand down if a reap is in progress. A reap means the host is exiting (or
@@ -163,7 +165,7 @@ class OutOfProcessPluginSpawnerImpl(
 
                 // spawn() enters the child in the kernel registry, which is what the shutdown hook
                 // reaps. See ProcessSpawner's KDoc for why registration lives there.
-                val managedProcess = processSpawner.spawn(config)
+                val managedProcess = reapSpawnGate.spawn(spawnGeneration) { processSpawner.spawn(config) }
                 managedProcesses[pluginId] = managedProcess
 
                 // Wait for the child process to register with the kernel
