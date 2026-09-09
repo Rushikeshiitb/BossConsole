@@ -366,8 +366,10 @@ class HeavyweightOverlayTest {
         ).forEach { path ->
             val source = root.resolve("composeApp/src/desktopMain/kotlin/ai/rever/boss/$path").readText()
             assertTrue(
-                Regex("CompositionLocalProvider\\(LocalDismissModalOnFocusLoss provides false\\)\\s*\\{\\s*BossDialog\\(")
-                    .containsMatchIn(source),
+                Regex(
+                    "CompositionLocalProvider\\(LocalDismissModalOnFocusLoss provides false\\)" +
+                        "\\s*\\{\\s*BossDialog\\(",
+                ).containsMatchIn(source),
                 "$path must opt the whole dialog out of focus-loss dismissal",
             )
             assertTrue(source.contains("dismissOnClickOutside = false"), "$path must not dismiss on a return click")
