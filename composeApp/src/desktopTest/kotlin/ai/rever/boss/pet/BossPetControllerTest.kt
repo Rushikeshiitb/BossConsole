@@ -2,7 +2,6 @@ package ai.rever.boss.pet
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Pins every transition of [BossPetController], the state machine the floating pet renders.
@@ -48,7 +47,7 @@ class BossPetControllerTest {
         val c = controller()
         c.taskStarted("a")
         c.taskFinished("a", "Build finished")
-        assertEquals(BossPetMood.Completed("Build finished"), c.mood.value)
+        assertEquals(BossPetMood.Completed("Build finished", "a"), c.mood.value)
     }
 
     @Test
@@ -57,7 +56,7 @@ class BossPetControllerTest {
         c.taskStarted("a")
         c.taskStarted("b")
         c.taskFinished("a", "Agent finished")
-        assertEquals(BossPetMood.Completed("Agent finished"), c.mood.value)
+        assertEquals(BossPetMood.Completed("Agent finished", "a"), c.mood.value)
         // Dismissing the announcement must fall back to the still-running task, not to idle.
         c.dismissAnnouncement()
         assertEquals(BossPetMood.Working(1), c.mood.value)
@@ -67,7 +66,7 @@ class BossPetControllerTest {
     fun `finishing an id that was never started still announces and never goes negative`() {
         val c = controller()
         c.taskFinished("ghost", "Done")
-        assertEquals(BossPetMood.Completed("Done"), c.mood.value)
+        assertEquals(BossPetMood.Completed("Done", "ghost"), c.mood.value)
         c.dismissAnnouncement()
         assertEquals(BossPetMood.Idle, c.mood.value)
     }
@@ -87,7 +86,7 @@ class BossPetControllerTest {
         val c = controller()
         c.taskStarted("a")
         c.taskFailed("a", "Build failed")
-        assertEquals(BossPetMood.Failed("Build failed"), c.mood.value)
+        assertEquals(BossPetMood.Failed("Build failed", "a"), c.mood.value)
     }
 
     @Test
@@ -102,7 +101,7 @@ class BossPetControllerTest {
         f.taskStarted("b")
         f.taskFailed("b", "Boom")
         f.onIdleTimeout()
-        assertEquals(BossPetMood.Failed("Boom"), f.mood.value)
+        assertEquals(BossPetMood.Failed("Boom", "b"), f.mood.value)
     }
 
     @Test
@@ -114,15 +113,13 @@ class BossPetControllerTest {
     }
 
     @Test
-    fun `the idle timeout does not clear a completion while other work is still running`() {
+    fun `the idle timeout returns to other live work`() {
         val c = controller()
         c.taskStarted("a")
         c.taskStarted("b")
         c.taskFinished("a", "One done")
         c.onIdleTimeout()
-        // Still Completed: there is live work, so this was not a success the user has had time to
-        // see in an idle window.
-        assertEquals(BossPetMood.Completed("One done"), c.mood.value)
+        assertEquals(BossPetMood.Working(1), c.mood.value)
     }
 
     @Test
@@ -136,12 +133,62 @@ class BossPetControllerTest {
     }
 
     @Test
-    fun `new work overrides a standing announcement`() {
+    fun `new work preserves a standing announcement`() {
         val c = controller()
         c.taskStarted("a")
         c.taskFinished("a", "Done")
-        assertTrue(c.mood.value is BossPetMood.Completed)
+        assertEquals(BossPetMood.Completed("Done", "a"), c.mood.value)
         c.taskStarted("b")
+        assertEquals(BossPetMood.Completed("Done", "a"), c.mood.value)
+    }
+
+    @Test
+    fun `new activity and completion cannot erase an unacknowledged failure`() {
+        val c = controller()
+        c.taskFailed("a", "Build failed")
+        c.taskStarted("b")
+        c.taskFinished("b", "Agent finished")
+        c.onIdleTimeout()
+        assertEquals(BossPetMood.Failed("Build failed", "a"), c.mood.value)
+        c.dismissAnnouncement()
+        assertEquals(BossPetMood.Completed("Agent finished", "b", 1), c.mood.value)
+        c.onIdleTimeout()
+        assertEquals(BossPetMood.Idle, c.mood.value)
+    }
+
+    @Test
+    fun `identically labelled completions retain separate task identities`() {
+        val c = controller()
+        c.taskFinished("a", "Done")
+        c.taskFinished("b", "Done")
+        assertEquals(BossPetMood.Completed("Done", "a"), c.mood.value)
+        c.dismissAnnouncement()
+        assertEquals(BossPetMood.Completed("Done", "b", 1), c.mood.value)
+    }
+
+    @Test
+    fun `stopping one task preserves other activity and failures`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskStarted("b")
+        c.taskFailed("c", "Failure")
+        c.taskStopped("a")
+        assertEquals(BossPetMood.Failed("Failure", "c"), c.mood.value)
+        c.dismissAnnouncement()
         assertEquals(BossPetMood.Working(1), c.mood.value)
+    }
+
+    @Test
+    fun `a new run of the same task retains both results with distinct timer identities`() {
+        val c = controller()
+        c.taskStarted("a")
+        c.taskFinished("a", "Done")
+        c.taskStarted("a")
+        c.taskFinished("a", "Done")
+        assertEquals(BossPetMood.Completed("Done", "a"), c.mood.value)
+        c.onIdleTimeout()
+        assertEquals(BossPetMood.Completed("Done", "a", 1), c.mood.value)
+        c.onIdleTimeout()
+        assertEquals(BossPetMood.Idle, c.mood.value)
     }
 }

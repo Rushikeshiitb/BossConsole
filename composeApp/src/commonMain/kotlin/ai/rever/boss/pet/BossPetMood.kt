@@ -24,20 +24,24 @@ sealed interface BossPetMood {
     ) : BossPetMood
 
     /**
-     * The last task finished successfully and has not been acknowledged yet. [label] names it
+     * The next unacknowledged task finished successfully and has not been acknowledged yet. [label] names it
      * (e.g. "Build finished"). Reverts to [Idle] on [BossPetController.dismissAnnouncement] or after
      * the auto-idle timeout, or to [Working] if another task is still running.
      */
     data class Completed(
         val label: String,
+        val taskId: String,
+        val sequence: Long = 0,
     ) : BossPetMood
 
     /**
-     * The last task failed and wants attention. [label] names it. Unlike [Completed] this never
+     * The next unacknowledged task failed and wants attention. [label] names it. Unlike [Completed] this never
      * auto-dismisses on a timeout - a failure the user never saw is the thing this state exists to
      * prevent - so it clears only on an explicit [BossPetController.dismissAnnouncement].
      */
     data class Failed(
         val label: String,
+        val taskId: String,
+        val sequence: Long = 0,
     ) : BossPetMood
 }

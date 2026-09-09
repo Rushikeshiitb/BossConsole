@@ -2,7 +2,6 @@ package ai.rever.boss.pet
 
 import ai.rever.boss.config.BossPetSettingsManager
 import ai.rever.boss.updater.UpdateManager
-import ai.rever.boss.updater.UpdateState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -39,9 +38,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
+import java.awt.GraphicsEnvironment
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collectLatest
-import java.awt.Toolkit
 
 /**
  * The floating BOSS pet: a small, draggable, always-on-top companion that shows what the session's
@@ -134,20 +133,7 @@ fun BossPetWindow() {
 private fun BossPetUpdateBridge() {
     LaunchedEffect(Unit) {
         UpdateManager.instance.updateState.collectLatest { state ->
-            when (state) {
-                is UpdateState.CheckingForUpdates,
-                is UpdateState.Downloading,
-                is UpdateState.Installing,
-                -> BossPet.controller.taskStarted(UPDATE_TASK_ID)
-
-                is UpdateState.ReadyToInstall -> BossPet.controller.taskFinished(UPDATE_TASK_ID, "Update ready to install")
-                is UpdateState.RestartRequired -> BossPet.controller.taskFinished(UPDATE_TASK_ID, "Update installed - restart BOSS")
-                is UpdateState.Error -> BossPet.controller.taskFailed(UPDATE_TASK_ID, "Update failed")
-
-                // Idle / UpToDate / UpdateAvailable are not work in progress: clear any standing
-                // "checking" so the pet does not sit spinning after a check finds nothing.
-                else -> BossPet.controller.dismissAnnouncement()
-            }
+            reportPetUpdateState(BossPet.controller, state)
         }
     }
 }
@@ -243,23 +229,21 @@ private fun labelFor(mood: BossPetMood): String? =
         is BossPetMood.Failed -> mood.label
     }
 
-/** Default bottom-right of the primary screen, inset from the edges. Approximate: the user drags. */
+/** Restore on a connected display, falling back to the primary display after monitor removal. */
 private fun initialPosition(): Pair<Int, Int> {
     val saved = BossPetSettingsManager.settings.value
-    val savedX = saved.anchorX
-    val savedY = saved.anchorY
-    if (savedX != null && savedY != null) return savedX to savedY
-
-    val screen = runCatching { Toolkit.getDefaultToolkit().screenSize }.getOrNull()
-    val w = screen?.width ?: 1200
-    val h = screen?.height ?: 800
-    return (w - PET_WIDTH - 40) to (h - PET_HEIGHT - 80)
+    val screens =
+        runCatching {
+            val environment = GraphicsEnvironment.getLocalGraphicsEnvironment()
+            val primary = environment.defaultScreenDevice
+            (listOf(primary) + environment.screenDevices.filter { it != primary }).map { it.defaultConfiguration.bounds }
+        }.getOrDefault(emptyList())
+    return petPosition(saved.anchorX, saved.anchorY, screens, PET_WIDTH, PET_HEIGHT)
 }
 
 private const val PET_WIDTH = 220
 private const val PET_HEIGHT = 56
 private const val AUTO_IDLE_MS = 6_000L
-private const val UPDATE_TASK_ID = "app-update"
 
 private val CARD_BG = Color(0xF01B1D22)
 private val TEXT = Color(0xFFE8EAED)
