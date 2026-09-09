@@ -1,5 +1,6 @@
 package ai.rever.boss.pet
 
+import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 
 /** A saved anchor may name a disconnected display. Keep the whole card on a connected screen. */
@@ -24,3 +25,11 @@ internal fun petPosition(
     return x.coerceIn(target.x, target.x + target.width - width) to
         y.coerceIn(target.y, target.y + target.height - height)
 }
+
+internal fun connectedPetScreens(): List<Rectangle> =
+    runCatching {
+        val environment = GraphicsEnvironment.getLocalGraphicsEnvironment()
+        val primary = environment.defaultScreenDevice
+        (listOf(primary) + environment.screenDevices.filter { it != primary })
+            .map { it.defaultConfiguration.bounds }
+    }.getOrDefault(emptyList())

@@ -53,7 +53,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.awt.GraphicsEnvironment
 import kotlin.math.roundToInt
 
 /**
@@ -121,7 +120,7 @@ private fun rememberPetDragModifier(windowState: WindowState): Modifier {
                         petPosition(
                             p.x.value.roundToInt(),
                             p.y.value.roundToInt(),
-                            connectedScreens(),
+                            connectedPetScreens(),
                             PET_WIDTH,
                             PET_HEIGHT,
                         )
@@ -287,16 +286,8 @@ private fun labelFor(mood: BossPetMood): String? =
 /** Restore on a connected display, falling back to the primary display after monitor removal. */
 private fun initialPosition(): Pair<Int, Int> {
     val saved = BossPetSettingsManager.settings.value
-    return petPosition(saved.anchorX, saved.anchorY, connectedScreens(), PET_WIDTH, PET_HEIGHT)
+    return petPosition(saved.anchorX, saved.anchorY, connectedPetScreens(), PET_WIDTH, PET_HEIGHT)
 }
-
-private fun connectedScreens(): List<java.awt.Rectangle> =
-    runCatching {
-        val environment = GraphicsEnvironment.getLocalGraphicsEnvironment()
-        val primary = environment.defaultScreenDevice
-        (listOf(primary) + environment.screenDevices.filter { it != primary })
-            .map { it.defaultConfiguration.bounds }
-    }.getOrDefault(emptyList())
 
 private const val PET_WIDTH = 220
 private const val PET_HEIGHT = 56
