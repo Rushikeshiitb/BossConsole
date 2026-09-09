@@ -1,6 +1,10 @@
 package ai.rever.boss.kernel
 
-/** Serializes child registration with the start of a reap, including already-preparing spawns. */
+/**
+ * Counts overlapping reaps and fences work prepared before them. A new request after a completed
+ * mode-switch reap is allowed; a request prepared before it is stale even after the depth reaches zero.
+ * Process creation runs outside the monitor so it cannot consume a shutdown hook's waiting budget.
+ */
 internal class ReapSpawnGate {
     private var depth = 0
     private var generation = 0L
@@ -19,14 +23,27 @@ internal class ReapSpawnGate {
 
     @Synchronized
     fun endReap() {
+        check(depth > 0) { "Unbalanced reap completion" }
         depth--
     }
 
-    @Synchronized
-    fun <T> spawn(expectedGeneration: Long, registerChild: () -> T): T {
-        check(depth == 0 && generation == expectedGeneration) { "A reap interrupted plugin startup" }
-        return registerChild()
+    private fun admits(expected: Long): Boolean = synchronized(this) { depth == 0 && generation == expected }
+
+    fun <T> spawn(
+        expectedGeneration: Long,
+        createChild: () -> T,
+        discardChild: (T) -> Unit,
+    ): T {
+        if (!admits(expectedGeneration)) throw ReapAdmissionException()
+        val child = createChild()
+        if (!admits(expectedGeneration)) {
+            discardChild(child)
+            throw ReapAdmissionException()
+        }
+        return child
     }
 }
+
+internal class ReapAdmissionException : IllegalStateException("A reap interrupted process startup")
 
 internal val reapSpawnGate = ReapSpawnGate()

@@ -92,23 +92,6 @@ private fun resolveServiceJar(
 
 private val reapLogger = LoggerFactory.getLogger("KernelReaper")
 
-/**
- * How many [reapChildren] calls are in flight, so recovery paths know to stand down while any is.
- *
- * Stopping supervision closes the *detection* path but not the *action* path: the failure collector
- * runs on the kernel's own scope, which a reap deliberately does not cancel, and a `handleFailure`
- * already in flight can sit for the orchestrator-advice timeout and then respawn a child *after* the
- * reap took its snapshot. A shared flow with buffered failures can also deliver one after the
- * cancel. Either way the exiting host gains a child nothing will reap.
- *
- * A COUNT, not a flag. `main.kt` and `KernelBootstrap` each install a JVM shutdown hook, and the JVM
- * runs hooks concurrently in unspecified order, so a bare boolean's `finally { reaping = false }`
- * could clear the in-progress signal while the OTHER hook is still reaping. Incrementing on entry
- * and decrementing on exit keeps the signal true until the last reap finishes, and returns it to
- * false afterwards so an in-process mode switch ([KernelBootstrap.shutdown]) can spawn again.
- */
-// The same gate also protects plugin registration from racing the reap snapshot.
-
 /** Whether a reap is in progress. Recovery must not spawn anything while this is true. */
 internal fun isReaping(): Boolean = reapSpawnGate.isReaping()
 
@@ -169,7 +152,11 @@ internal fun reapChildren(
             runCatching { it.process.destroyForcibly() }
         }
 
-        // Children are dead, so nothing is going to answer on these. Close them without waiting.
+        // SIGKILL completion is asynchronous. Give the whole cohort one short shared budget
+        // before deciding which handles are confirmed dead; surviving children stay registered.
+        awaitForcedChildren(children)
+
+        // Close channels without adding a per-child IPC timeout.
         children.forEach { runCatching { it.ipcClient?.shutdown(timeoutMs = 0) } }
 
         // Drop confirmed-dead handles, preserving live children if termination failed or is pending.
@@ -177,10 +164,30 @@ internal fun reapChildren(
         // this for an in-process mode switch, where the registry is process-wide and outlives the
         // reap - stale dead entries would otherwise persist into the next generation. Keyed by
         // config.processId, which is exactly what ProcessSpawner.spawn registered them under.
-        children.filterNot { it.isAlive }.forEach { runCatching { registry?.unregisterIfSame(it.config.processId, it) } }
+        children.filterNot { it.isAlive }.forEach { child ->
+            runCatching { registry?.unregisterIfSame(child.config.processId, child) }
+        }
     } finally {
         reapSpawnGate.endReap()
     }
+}
+
+private fun awaitForcedChildren(children: List<ManagedProcess>) {
+    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(100)
+    children.filter { it.isAlive }.forEach { child ->
+        val remaining = deadline - System.nanoTime()
+        if (remaining > 0) runCatching { child.process.waitFor(remaining, TimeUnit.NANOSECONDS) }
+    }
+}
+
+internal fun discardReapedSpawn(
+    child: ManagedProcess,
+    registry: ProcessRegistry?,
+) {
+    runCatching { child.process.destroyForcibly() }
+    runCatching { child.process.waitFor(100, TimeUnit.MILLISECONDS) }
+    runCatching { child.ipcClient?.shutdown(timeoutMs = 0) }
+    if (!child.isAlive) runCatching { registry?.unregisterIfSame(child.config.processId, child) }
 }
 
 private val recoveryLogger = LoggerFactory.getLogger("KernelRecovery")
@@ -602,6 +609,7 @@ class KernelBootstrap(
         processId: String,
         jvmArgsOverride: List<String>? = null,
     ) {
+        val generation = reapSpawnGate.generation()
         val process = respawnCandidate(registry, processId) ?: return
         val restartCount = registry.getRestartCount(processId)
 
@@ -617,7 +625,11 @@ class KernelBootstrap(
         try {
             // spawn() registers the replacement itself. The manifest survives because a respawn
             // never unregisters, so it is still keyed under this processId.
-            spawner.spawn(config)
+            reapSpawnGate.spawn(
+                generation,
+                createChild = { spawner.spawn(config) },
+                discardChild = { discardReapedSpawn(it, registry) },
+            )
             registry.incrementRestartCount(processId)
         } catch (e: Exception) {
             logger.error("Respawn failed for {}: {}", processId, e.message)

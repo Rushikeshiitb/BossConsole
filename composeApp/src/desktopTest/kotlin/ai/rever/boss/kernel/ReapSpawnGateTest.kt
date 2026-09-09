@@ -16,49 +16,52 @@ class ReapSpawnGateTest {
         gate.beginReap()
         gate.endReap()
         assertTrue(gate.isReaping())
-        assertFailsWith<IllegalStateException> { gate.spawn(gate.generation()) { error("must not spawn") } }
+        assertFailsWith<ReapAdmissionException> { gate.spawn(gate.generation(), { true }, {}) }
         gate.endReap()
         assertFalse(gate.isReaping())
-        assertTrue(gate.spawn(gate.generation()) { true })
+        assertTrue(gate.spawn(gate.generation(), { true }, {}))
     }
 
     @Test
-    fun `a spawn prepared before a completed reap is refused`() {
+    fun `a spawn prepared before a completed reap is refused before creating anything`() {
         val gate = ReapSpawnGate()
         val generation = gate.generation()
         gate.beginReap()
         gate.endReap()
-        assertFailsWith<IllegalStateException> { gate.spawn(generation) { error("must not spawn") } }
+        assertFailsWith<ReapAdmissionException> { gate.spawn(generation, { error("must not spawn") }, {}) }
     }
 
     @Test
-    fun `a reap cannot snapshot before an admitted child registers`() {
+    fun `a slow fork cannot block a reap and its late child is discarded`() {
         val gate = ReapSpawnGate()
         val generation = gate.generation()
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
-        val reapStarted = CountDownLatch(1)
         val executor = Executors.newFixedThreadPool(2)
+        var discarded = false
         try {
-            val spawn = executor.submit<Boolean> {
-                gate.spawn(generation) {
-                    entered.countDown()
-                    check(release.await(5, TimeUnit.SECONDS))
-                    true
+            val spawn =
+                executor.submit<Boolean> {
+                    try {
+                        gate.spawn(generation, {
+                            entered.countDown()
+                            check(release.await(5, TimeUnit.SECONDS))
+                            true
+                        }, { discarded = true })
+                        false
+                    } catch (_: ReapAdmissionException) {
+                        true
+                    }
                 }
-            }
             assertTrue(entered.await(5, TimeUnit.SECONDS))
-            val reap = executor.submit {
-                reapStarted.countDown()
-                gate.beginReap()
-            }
-            assertTrue(reapStarted.await(5, TimeUnit.SECONDS))
-            assertFalse(reap.isDone)
+            executor
+                .submit {
+                    gate.beginReap()
+                    gate.endReap()
+                }.get(5, TimeUnit.SECONDS)
             release.countDown()
             assertTrue(spawn.get(5, TimeUnit.SECONDS))
-            reap.get(5, TimeUnit.SECONDS)
-            assertTrue(gate.isReaping())
-            gate.endReap()
+            assertTrue(discarded)
         } finally {
             release.countDown()
             executor.shutdownNow()
