@@ -508,7 +508,9 @@ internal fun shouldKeepMeasuring(
  *
  * [region] is `[x, y, width, height]` in AWT logical units, which map 1:1 to dp, so width and height
  * carry straight across with no density conversion - the same unit contract [cornerPosition] relies
- * on.
+ * on. A taller stack also owns a taller click-catching region. Content beyond the parent height
+ * still requires a scrolling or bounded toast layout; raising this ceiling alone cannot expose it.
+ * The null fallback is defensive: HeavyweightCorner returns before composing when bounds are absent.
  */
 internal fun regionCeiling(
     region: IntArray?,

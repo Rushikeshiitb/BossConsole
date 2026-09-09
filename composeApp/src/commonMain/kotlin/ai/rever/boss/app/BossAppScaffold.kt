@@ -111,8 +111,8 @@ import kotlinx.coroutines.launch
  *
  * It is the window's size for the one frame before measurement lands, and the region the overlay
  * swallows clicks in until then, so it is kept no larger than it needs to be: `PluginToastHost`'s
- * own `widthIn(max = 400.dp)` plus its 16.dp padding on each side, and a height that comfortably
- * clears `PluginToastState`'s three-toast maximum. It is NOT the measurement ceiling - that is the
+ * own `widthIn(max = 400.dp)` plus its 16.dp padding on each side, and the existing 600dp height to
+ * limit first-frame grow-in for typical stacks. It is NOT the measurement ceiling - that is the
  * parent content pane (see `HeavyweightCorner` / `regionCeiling`), so content taller than this grows
  * the window rather than being clipped. The two were one number until #154, which clipped three
  * verbose toasts' dismiss buttons off the bottom of the content-sized window.
