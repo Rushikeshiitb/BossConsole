@@ -15,9 +15,13 @@ internal fun reportPetUpdateState(
         is UpdateState.Downloading,
         is UpdateState.Installing,
         -> controller.taskStarted(UPDATE_TASK_ID)
+
         is UpdateState.ReadyToInstall -> controller.taskFinished(UPDATE_TASK_ID, "Update ready to install")
+
         is UpdateState.RestartRequired -> controller.taskFinished(UPDATE_TASK_ID, "Update installed - restart BOSS")
+
         is UpdateState.Error -> controller.taskFailed(UPDATE_TASK_ID, "Update failed")
+
         is UpdateState.Idle,
         is UpdateState.UpToDate,
         is UpdateState.UpdateAvailable,
