@@ -204,7 +204,7 @@ class EditorContentProviderImpl : EditorContentProvider {
 }
 
 /**
- * The [Language] to run [mainFunction] as, resolved from its FILE PATH.
+ * The [Language] to run [main] as, resolved from its FILE PATH.
  *
  * Deliberately not `Language.fromExtension(mainFunction.language)`: [toMainFunctionInfo] serialises
  * the language as `this.language.name.lowercase()` - a language NAME (`"kotlin"`, `"python"`) - but
@@ -213,8 +213,7 @@ class EditorContentProviderImpl : EditorContentProvider {
  * `echo 'Unknown language'`. The path carries the real extension and is what [detectMainFunctions]
  * derived the language from in the first place, so it round-trips correctly.
  */
-internal fun runLanguageForMainFunction(mainFunction: MainFunctionInfo): Language =
-    Language.fromFileName(mainFunction.filePath)
+internal fun runLanguageForMainFunction(main: MainFunctionInfo): Language = Language.fromFileName(main.filePath)
 
 /**
  * Extension function to convert DetectedMainFunction to MainFunctionInfo.
