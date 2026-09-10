@@ -213,7 +213,7 @@ class EditorContentProviderImpl : EditorContentProvider {
  * `echo 'Unknown language'`. The path carries the real extension and is what [detectMainFunctions]
  * derived the language from in the first place, so it round-trips correctly.
  */
-internal fun runLanguageForMainFunction(main: MainFunctionInfo): Language = Language.fromFileName(main.filePath)
+internal fun runLanguageForMainFunction(mainFunction: MainFunctionInfo): Language = Language.fromFileName(mainFunction.filePath)
 
 /**
  * Extension function to convert DetectedMainFunction to MainFunctionInfo.

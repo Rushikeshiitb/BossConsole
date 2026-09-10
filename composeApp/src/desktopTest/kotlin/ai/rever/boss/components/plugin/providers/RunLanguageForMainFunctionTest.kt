@@ -45,6 +45,21 @@ class RunLanguageForMainFunctionTest {
     }
 
     @Test
+    fun `alternate extensions use the same language as detection`() {
+        assertEquals(Language.KOTLIN, runLanguageForMainFunction(info("/p/build tool.kts", "kotlin")))
+        assertEquals(Language.JAVASCRIPT, runLanguageForMainFunction(info("/p/app.jsx", "javascript")))
+        assertEquals(Language.JAVASCRIPT, runLanguageForMainFunction(info("/p/index.mjs", "javascript")))
+        assertEquals(Language.TYPESCRIPT, runLanguageForMainFunction(info("/p/app.tsx", "typescript")))
+    }
+
+    @Test
+    fun `path remains authoritative for missing or conflicting stored names`() {
+        assertEquals(Language.PYTHON, runLanguageForMainFunction(info("/p/app.py", "unknown")))
+        assertEquals(Language.PYTHON, runLanguageForMainFunction(info("/p/app.py", "java")))
+        assertEquals(Language.UNKNOWN, runLanguageForMainFunction(info("/p/script", "python")))
+    }
+
+    @Test
     fun `the old extension-of-the-name lookup would have returned UNKNOWN`() {
         // Why the fix is needed: fromExtension on the language NAME misses for all but java/go.
         assertEquals(Language.UNKNOWN, Language.fromExtension("kotlin"))
