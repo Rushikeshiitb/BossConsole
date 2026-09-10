@@ -24,11 +24,14 @@
 --
 -- Why this is safe
 -- ----------------
--- Every legitimate path is SECURITY DEFINER and so bypasses RLS:
+-- The stats functions run as their table-owning definer and bypass RLS:
 --   - reads:  get_plugin_with_stats, search_plugins, get_plugin_versions
 --             (all COUNT(*) over plugin_downloads)
---   - writes: record_plugin_download (EXECUTE granted to service_role only),
---             called from the plugin-store Edge Function.
+--   - writes: record_plugin_download, called with the service-role client from
+--             the plugin-store Edge Function, which supplies the caller identity.
+-- The original service_role GRANT was additive: PUBLIC EXECUTE and the default
+-- anon/authenticated function grants still allowed clients to forge RPC writes.
+-- Restrict that RPC here too, without depending on the separate draft PR #423.
 -- So removing the permissive client policies changes nothing for the app and
 -- closes both defects. Direct table reads and writes by anon/authenticated are
 -- denied by RLS with no permissive policy in force.
@@ -37,15 +40,24 @@
 -- not rely on RLS alone. The SECURITY DEFINER functions above run as their owner
 -- and are unaffected; a future permissive policy could not re-open access without
 -- a matching GRANT being added deliberately.
-REVOKE SELECT, INSERT, UPDATE, DELETE ON public.plugin_downloads FROM anon, authenticated;
+-- ALL also removes TRUNCATE, which is not subject to row-level security.
+REVOKE ALL ON TABLE public.plugin_downloads FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT ON TABLE public.plugin_downloads TO service_role;
+
+REVOKE ALL ON FUNCTION public.record_plugin_download(uuid, uuid, uuid, text)
+    FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_plugin_download(uuid, uuid, uuid, text)
+    TO service_role;
 
 -- Remove the over-broad policies. IF EXISTS keeps this re-runnable.
 DROP POLICY IF EXISTS "Downloads viewable via service role" ON public.plugin_downloads;
 DROP POLICY IF EXISTS "Service role can track downloads" ON public.plugin_downloads;
+DROP POLICY IF EXISTS "plugin_downloads service role read" ON public.plugin_downloads;
+DROP POLICY IF EXISTS "plugin_downloads service role insert" ON public.plugin_downloads;
 
 -- Re-state the intent explicitly for service_role. These are no-ops at runtime
--- (service_role bypasses RLS) but keep the intended access legible next to the
--- table and guard against a future GRANT to service_role changing behaviour.
+-- (service_role bypasses RLS) but document the intended access and retain it if
+-- that role's BYPASSRLS attribute is removed in a future deployment.
 CREATE POLICY "plugin_downloads service role read"
     ON public.plugin_downloads FOR SELECT TO service_role
     USING (true);
