@@ -164,36 +164,34 @@ object WebsiteMatchingUtil {
         secretWebsite: String,
         currentDomain: String,
     ): MatchScore {
-        val secretNorm = secretWebsite.lowercase().trim()
-        val domainNorm = currentDomain.lowercase().trim()
+        val secretNorm = secretWebsite.lowercase().trim().removePrefix("www.")
+        val domainNorm = currentDomain.lowercase().trim().removePrefix("www.")
 
+        // A credential is only offered when the domains genuinely match. Matching is exact on the
+        // registrable domain, or a real subdomain boundary of it - nothing looser. The previous
+        // `contains` and split-and-intersect branches over-matched badly: `contains` made an
+        // apple.com secret match snapple.com and login-apple.com, and the "partial" branch split on
+        // "." so the shared public suffix ("com") made EVERY .com secret match EVERY .com site.
+        // Both cleared the 0.3 offer threshold in matchSecretsForDomain, so the browser suggested
+        // the wrong site's credentials. See issue #460.
         return when {
-            // Exact match
+            secretNorm.isEmpty() || domainNorm.isEmpty() -> {
+                MatchScore(0.0f, "no_match")
+            }
+
+            // Exact match on the registrable domain.
             secretNorm == domainNorm -> {
                 MatchScore(1.0f, "exact")
             }
 
-            // Subdomain match (login.google.com vs google.com)
+            // A real subdomain boundary: one is a dotted suffix of the other
+            // (login.google.com vs google.com), never a bare substring (snapple.com vs apple.com).
             secretNorm.endsWith(".$domainNorm") || domainNorm.endsWith(".$secretNorm") -> {
                 MatchScore(0.9f, "subdomain")
             }
 
-            // Domain contains other (google.com contains google)
-            secretNorm.contains(domainNorm) || domainNorm.contains(secretNorm) -> {
-                MatchScore(0.7f, "domain")
-            }
-
-            // Partial match (same keywords)
             else -> {
-                val secretParts = secretNorm.split(".", "-", "_")
-                val domainParts = domainNorm.split(".", "-", "_")
-                val commonParts = secretParts.intersect(domainParts.toSet())
-
-                if (commonParts.isNotEmpty()) {
-                    MatchScore(0.5f, "partial")
-                } else {
-                    MatchScore(0.0f, "no_match")
-                }
+                MatchScore(0.0f, "no_match")
             }
         }
     }
@@ -265,7 +263,9 @@ object WebsiteMatchingUtil {
                 // Generic formatting: example-site → Example Site
                 nameWithoutTld
                     .split("-", "_")
-                    .joinToString(" ") { it.replaceFirstChar { c -> if (c.isLowerCase()) c.titlecase() else it } }
+                    .joinToString(" ") { word ->
+                        word.replaceFirstChar { c -> if (c.isLowerCase()) c.titlecase() else c.toString() }
+                    }
             }
         }
     }
