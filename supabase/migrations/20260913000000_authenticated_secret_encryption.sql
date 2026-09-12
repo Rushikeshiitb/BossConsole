@@ -183,6 +183,89 @@ REVOKE ALL ON FUNCTION "public"."encrypt_text"("text") FROM PUBLIC, anon, authen
 REVOKE ALL ON FUNCTION "public"."decrypt_text"("text") FROM PUBLIC, anon, authenticated;
 
 
+-- Function 2.3 (new): rekey_secret_envelope
+-- -----------------------------------------------------------------------------
+-- Re-encrypt one stored value from an old key to a new key, in a single
+-- expression, for supabase/ops/rotate_master_encryption_key.sql. Rotation
+-- decrypts under the old key and encrypts under the new one BEFORE the vault
+-- swap, so both keys are in play at once and neither can come from the vault -
+-- which is why the two functions above are not usable here and this takes both
+-- keys as parameters. It exists so rotation shares one construction with
+-- encrypt_text / decrypt_text instead of re-implementing pgcrypto raw (which is
+-- what regressed rotation to the deterministic zero-IV form before this):
+--   * decrypt is version-aware - a 'v2:' body is HMAC-verified and decrypted
+--     under the hex-decoded old key; anything else is read as a legacy zero-IV
+--     row under the old key's ASCII bytes, exactly as decrypt_text does;
+--   * encrypt always emits a fresh 'v2:' envelope under the hex-decoded new key,
+--     so a rotation upgrades legacy rows and never produces deterministic output.
+-- `prefix` is the storage marker the rotation map carries (for example TOTP's
+-- 'v1:'); it is stripped before decrypt and re-applied after encrypt. Plaintext
+-- lives only inside this call - never in a column or temp - preserving the
+-- rotation script's no-materialization guarantee. Keys are parameters, so this
+-- is not a vault oracle; it is still revoked from every client role and left to
+-- the owner that runs rotation.
+CREATE OR REPLACE FUNCTION "public"."rekey_secret_envelope"(
+    "stored" "text", "prefix" "text", "old_key" "text", "new_key" "text"
+) RETURNS "text"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public, pg_catalog, extensions'
+    AS $$
+DECLARE
+    body_in text;
+    plain   bytea;
+    old_enc bytea;
+    new_enc bytea;
+    raw     bytea;
+    iv      bytea;
+    mac     bytea;
+    ct      bytea;
+    new_iv  bytea;
+    new_ct  bytea;
+    new_mac bytea;
+BEGIN
+    IF stored IS NULL THEN
+        RETURN NULL;
+    END IF;
+    body_in := pg_catalog.substr(stored, pg_catalog.length(COALESCE(prefix, '')) + 1);
+
+    -- Decrypt under the old key, version-aware (mirrors decrypt_text).
+    IF pg_catalog.left(body_in, 3) = 'v2:' THEN
+        old_enc := pg_catalog.decode(old_key, 'hex');
+        raw := pg_catalog.decode(pg_catalog.substring(body_in, 4), 'base64');
+        IF pg_catalog.octet_length(raw) < 48 THEN
+            RAISE EXCEPTION 'stored envelope is too short to rekey' USING ERRCODE = '22023';
+        END IF;
+        iv  := pg_catalog.substring(raw, 1, 16);
+        mac := pg_catalog.substring(raw, 17, 32);
+        ct  := pg_catalog.substring(raw, 49);
+        IF extensions.hmac(iv || ct, extensions.hmac('BOSS-secret-mac-v2'::bytea, old_enc, 'sha256'::text), 'sha256'::text) <> mac THEN
+            RAISE EXCEPTION 'stored ciphertext failed integrity verification during rekey' USING ERRCODE = '22023';
+        END IF;
+        plain := extensions.decrypt_iv(ct, old_enc, iv, 'aes'::text);
+    ELSE
+        plain := extensions.decrypt(pg_catalog.decode(body_in, 'base64'::text), old_key::bytea, 'aes'::text);
+    END IF;
+
+    -- Re-encrypt under the new key as a fresh v2 envelope.
+    new_enc := pg_catalog.decode(new_key, 'hex');
+    IF pg_catalog.octet_length(new_enc) <> 32 THEN
+        RAISE EXCEPTION 'new master key must be 32 bytes (64 hex characters, e.g. `openssl rand -hex 32`); got % bytes',
+            pg_catalog.octet_length(new_enc)
+            USING ERRCODE = '22023';
+    END IF;
+    new_iv  := extensions.gen_random_bytes(16);
+    new_ct  := extensions.encrypt_iv(plain, new_enc, new_iv, 'aes'::text);
+    new_mac := extensions.hmac(new_iv || new_ct, extensions.hmac('BOSS-secret-mac-v2'::bytea, new_enc, 'sha256'::text), 'sha256'::text);
+    RETURN COALESCE(prefix, '') || 'v2:' || pg_catalog.encode(new_iv || new_mac || new_ct, 'base64'::text);
+END;
+$$;
+
+ALTER FUNCTION "public"."rekey_secret_envelope"("text", "text", "text", "text") OWNER TO "postgres";
+COMMENT ON FUNCTION "public"."rekey_secret_envelope"("text", "text", "text", "text") IS
+    'Re-encrypt one stored value from old_key to new_key as a v2 envelope, for key rotation. Version-aware read, always writes v2. Keys are parameters, not the vault.';
+REVOKE ALL ON FUNCTION "public"."rekey_secret_envelope"("text", "text", "text", "text") FROM PUBLIC, anon, authenticated, service_role;
+
+
 -- ============================================================================
 -- Backfill: rewrite every deterministically encrypted row into the v2 envelope.
 -- ============================================================================
