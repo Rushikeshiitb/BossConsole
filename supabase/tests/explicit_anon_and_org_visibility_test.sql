@@ -7,7 +7,7 @@ from unnest(array['anon', 'authenticated']) r
 cross join unnest(array['public.get_encryption_key()', 'public.encrypt_text(text)',
     'public.decrypt_text(text)', 'public.safe_decrypt_recovery_codes(text)',
     'public.user_display_name(uuid)', 'public.upsert_plugin_rating(uuid,uuid,integer,text)',
-    'public.record_plugin_download(uuid,uuid,uuid,text)', 'public.custom_access_token_hook(jsonb)']) f;
+    'public.record_plugin_download(uuid,uuid,uuid,text)', 'public.custom_access_token_hook(jsonb)', 'public.try_decrypt_text(text)']) f;
 
 -- Also exercise the actual database role, not only JWT claims on postgres.
 set local role authenticated;

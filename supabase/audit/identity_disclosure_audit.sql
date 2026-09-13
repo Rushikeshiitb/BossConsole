@@ -225,7 +225,7 @@ from unnest(array['public.get_encryption_key()', 'public.encrypt_text(text)',
                   'public.decrypt_text(text)', 'public.safe_decrypt_recovery_codes(text)',
                   'public.upsert_plugin_rating(uuid,uuid,integer,text)',
                   'public.record_plugin_download(uuid,uuid,uuid,text)',
-                  'public.custom_access_token_hook(jsonb)']) signature
+                  'public.custom_access_token_hook(jsonb)', 'public.try_decrypt_text(text)']) signature
 cross join unnest(array['anon', 'authenticated']) role_name
 where to_regprocedure(signature) is null
    or has_function_privilege(role_name, to_regprocedure(signature), 'EXECUTE')
