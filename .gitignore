@@ -127,3 +127,6 @@ supabase/tests/master_key_rotation_test.sql
 supabase/tests/db_access_audit_test.sql
 # Generated copies for pg_prove's tests-only container mount
 supabase/tests/.migration-fixtures/
+
+# Generated from the real encryption upgrade migration for pgTAP.
+supabase/tests/secret_encryption_upgrade_test.sql

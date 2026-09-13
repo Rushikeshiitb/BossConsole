@@ -14,7 +14,7 @@
 -- not re-open the client execute that 20260909120000 revoked.
 
 begin;
-select plan(10);
+select plan(15);
 
 -- A valid documented key: 32 bytes as 64 hex characters (`openssl rand -hex 32`).
 select vault.create_secret(
@@ -107,6 +107,25 @@ select ok(
     NOT has_function_privilege('anon', 'public.decrypt_text(text)', 'EXECUTE'),
     'anon still cannot execute decrypt_text after the replacement'
 );
+
+-- Text-to-bytea casts parse backslash escapes and hex literals. Passwords are
+-- text, so encryption must preserve their UTF-8 bytes without reinterpretation.
+select is(public.decrypt_text(public.encrypt_text($text$\x4142\path\123 café$text$)),
+    $text$\x4142\path\123 café$text$, 'literal backslashes and Unicode round trip');
+
+-- The previously shipped rotation script wrote a 32-byte BASE64 vault key.
+-- Upgrading must retain that key and read its legacy ciphertext unchanged.
+select vault.update_secret((select id from vault.secrets where name = 'master_encryption_key'),
+    encode(decode(repeat('ab', 32), 'hex'), 'base64'));
+select is(public.decrypt_text(public.encrypt_text('after old rotation')),
+    'after old rotation', 'base64 vault keys can write and read v2');
+select is(public.decrypt_text(encode(extensions.encrypt(convert_to('legacy rotated', 'UTF8'),
+    public.get_encryption_key()::bytea, 'aes'), 'base64')),
+    'legacy rotated', 'base64 vault keys still read legacy ciphertext');
+select throws_ok($$ select public.decode_secret_encryption_key('too-short') $$,
+    '22023', NULL, 'invalid key material is rejected');
+select ok(not has_function_privilege('authenticated', 'public.decode_secret_encryption_key(text)', 'EXECUTE'),
+    'key decoding helper remains internal');
 
 select * from finish();
 rollback;

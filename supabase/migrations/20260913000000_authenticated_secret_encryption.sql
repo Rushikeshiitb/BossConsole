@@ -27,7 +27,7 @@
 --
 -- Fix: a versioned 'v2:' envelope carrying a per-row random IV and an
 -- encrypt-then-MAC HMAC-SHA256 tag, keyed by the hex-decoded 32-byte master key
--- (true AES-256-CBC). decrypt_text reads both the new 'v2:' envelope and legacy
+-- (true AES-256-CBC; existing base64 rotation keys are decoded too). decrypt_text reads both the new 'v2:' envelope and legacy
 -- rows (raw base64, zero IV, ASCII key bytes) so existing data keeps decrypting;
 -- the backfill at the end re-encrypts every affected row into the v2 form.
 --
@@ -50,12 +50,40 @@
 -- erasure; backup retention and physical storage reclamation are separate
 -- operator decisions. Logical reads after commit see the v2 storage.
 --
--- Breaking change: the key is now hex-decoded and must be exactly 32 bytes
--- (64 hex characters, i.e. the documented `openssl rand -hex 32`). This lands
+-- The key is now decoded and must be exactly 32 bytes: either 64 hex characters
+-- or the base64 form written by the previously shipped rotation script. This lands
 -- together with the re-encryption backfill precisely because it changes the key
 -- derivation for new writes; legacy rows are still read with the old ASCII-bytes
 -- key until the backfill rewrites them in this same migration.
 -- ============================================================================
+
+-- Preserve keys produced by the pre-v2 rotation script as well as documented
+-- hex keys. Legacy ciphertext still uses the original text bytes when read.
+CREATE OR REPLACE FUNCTION public.decode_secret_encryption_key(key_text text)
+RETURNS bytea
+LANGUAGE plpgsql IMMUTABLE STRICT
+SET search_path = ''
+AS $$
+DECLARE
+    key_bytes bytea;
+BEGIN
+    IF key_text ~ '^[0-9A-Fa-f]{64}$' THEN
+        key_bytes := pg_catalog.decode(key_text, 'hex');
+    ELSIF key_text ~ '^[A-Za-z0-9+/]{43}=$' THEN
+        key_bytes := pg_catalog.decode(key_text, 'base64');
+    ELSE
+        RAISE EXCEPTION 'master encryption key must encode 32 bytes as hex or base64'
+            USING ERRCODE = '22023';
+    END IF;
+    IF pg_catalog.octet_length(key_bytes) <> 32 THEN
+        RAISE EXCEPTION 'master encryption key must encode 32 bytes'
+            USING ERRCODE = '22023';
+    END IF;
+    RETURN key_bytes;
+END;
+$$;
+ALTER FUNCTION public.decode_secret_encryption_key(text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.decode_secret_encryption_key(text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- Function 2.1 (replaces 20251023000005): encrypt_text
 -- -----------------------------------------------------------------------------
@@ -77,21 +105,16 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    -- Step 1: master key from the vault, hex-decoded to 32 raw bytes (256 bits).
+    -- Step 1: master key from the vault, decoded to 32 raw bytes (256 bits).
     encryption_key := public.get_encryption_key();
-    enc_key := pg_catalog.decode(encryption_key, 'hex');
-    IF pg_catalog.octet_length(enc_key) <> 32 THEN
-        RAISE EXCEPTION 'master_encryption_key must be 32 bytes (64 hex characters, e.g. `openssl rand -hex 32`); got % bytes',
-            pg_catalog.octet_length(enc_key)
-            USING ERRCODE = '22023';
-    END IF;
+    enc_key := public.decode_secret_encryption_key(encryption_key);
 
     -- Step 2: derive a distinct MAC key so the AES key is never reused for MAC.
     mac_key := extensions.hmac('BOSS-secret-mac-v2'::bytea, enc_key, 'sha256'::text);
 
     -- Step 3: encrypt under a fresh random IV (AES-256-CBC, PKCS padding).
     iv := extensions.gen_random_bytes(16);
-    ciphertext := extensions.encrypt_iv(plaintext::bytea, enc_key, iv, 'aes'::text);
+    ciphertext := extensions.encrypt_iv(pg_catalog.convert_to(plaintext, 'UTF8'), enc_key, iv, 'aes'::text);
 
     -- Step 4: encrypt-then-MAC over iv || ciphertext.
     mac := extensions.hmac(iv || ciphertext, mac_key, 'sha256'::text);
@@ -103,7 +126,7 @@ $$;
 
 ALTER FUNCTION "public"."encrypt_text"("plaintext" "text") OWNER TO "postgres";
 COMMENT ON FUNCTION "public"."encrypt_text"("plaintext" "text") IS
-    'Encrypt text as a versioned v2 envelope: AES-256-CBC under a random IV, encrypt-then-MAC HMAC-SHA256, hex-decoded 32-byte master key.';
+    'Encrypt text as a versioned v2 envelope: AES-256-CBC under a random IV, encrypt-then-MAC HMAC-SHA256, hex or base64 decoded 32-byte master key.';
 
 
 -- Function 2.2 (replaces 20251023000005): decrypt_text
@@ -131,8 +154,8 @@ BEGIN
     encryption_key := public.get_encryption_key();
 
     IF pg_catalog.left(ciphertext, 3) = 'v2:' THEN
-        -- New envelope: hex-decoded 32-byte key, verify HMAC, then decrypt.
-        enc_key := pg_catalog.decode(encryption_key, 'hex');
+        -- New envelope: decoded 32-byte key, verify HMAC, then decrypt.
+        enc_key := public.decode_secret_encryption_key(encryption_key);
         mac_key := extensions.hmac('BOSS-secret-mac-v2'::bytea, enc_key, 'sha256'::text);
 
         raw := pg_catalog.decode(pg_catalog.substring(ciphertext, 4), 'base64');
@@ -230,7 +253,7 @@ BEGIN
 
     -- Decrypt under the old key, version-aware (mirrors decrypt_text).
     IF pg_catalog.left(body_in, 3) = 'v2:' THEN
-        old_enc := pg_catalog.decode(old_key, 'hex');
+        old_enc := public.decode_secret_encryption_key(old_key);
         raw := pg_catalog.decode(pg_catalog.substring(body_in, 4), 'base64');
         IF pg_catalog.octet_length(raw) < 48 THEN
             RAISE EXCEPTION 'stored envelope is too short to rekey' USING ERRCODE = '22023';
@@ -247,12 +270,7 @@ BEGIN
     END IF;
 
     -- Re-encrypt under the new key as a fresh v2 envelope.
-    new_enc := pg_catalog.decode(new_key, 'hex');
-    IF pg_catalog.octet_length(new_enc) <> 32 THEN
-        RAISE EXCEPTION 'new master key must be 32 bytes (64 hex characters, e.g. `openssl rand -hex 32`); got % bytes',
-            pg_catalog.octet_length(new_enc)
-            USING ERRCODE = '22023';
-    END IF;
+    new_enc := public.decode_secret_encryption_key(new_key);
     new_iv  := extensions.gen_random_bytes(16);
     new_ct  := extensions.encrypt_iv(plain, new_enc, new_iv, 'aes'::text);
     new_mac := extensions.hmac(new_iv || new_ct, extensions.hmac('BOSS-secret-mac-v2'::bytea, new_enc, 'sha256'::text), 'sha256'::text);
@@ -277,6 +295,43 @@ REVOKE ALL ON FUNCTION "public"."rekey_secret_envelope"("text", "text", "text", 
 -- named in supabase/ops/rotate_master_encryption_key.sql are created outside this
 -- repo, so they are left for the rotation path (decrypt_text reads their legacy
 -- rows unchanged in the meantime).
+
+-- Fail closed before rewriting anything, but identify the damaged columns
+-- without including ciphertext, plaintext, keys or exception messages.
+DO $preflight$
+DECLARE
+    candidate record;
+    unreadable_passwords integer := 0;
+    unreadable_codes integer := 0;
+    unreadable_totp integer := 0;
+BEGIN
+    FOR candidate IN
+        SELECT 'password' AS kind, password_encrypted AS value FROM public.secrets
+        WHERE password_encrypted IS NOT NULL AND pg_catalog.left(password_encrypted, 3) <> 'v2:'
+        UNION ALL
+        SELECT 'recovery', recovery_codes_encrypted FROM public.secret_metadata
+        WHERE recovery_codes_encrypted IS NOT NULL AND pg_catalog.left(recovery_codes_encrypted, 3) <> 'v2:'
+        UNION ALL
+        SELECT 'totp', pg_catalog.substring(twofa_secret, 4) FROM public.secret_metadata
+        WHERE twofa_secret LIKE 'v1:%' AND pg_catalog.substring(twofa_secret, 4, 3) <> 'v2:'
+    LOOP
+        BEGIN
+            PERFORM public.decrypt_text(candidate.value);
+        EXCEPTION WHEN OTHERS THEN
+            IF candidate.kind = 'password' THEN unreadable_passwords := unreadable_passwords + 1;
+            ELSIF candidate.kind = 'recovery' THEN unreadable_codes := unreadable_codes + 1;
+            ELSE unreadable_totp := unreadable_totp + 1;
+            END IF;
+        END;
+    END LOOP;
+    IF unreadable_passwords + unreadable_codes + unreadable_totp > 0 THEN
+        RAISE EXCEPTION 'Secret encryption upgrade blocked: secrets.password_encrypted=%, secret_metadata.recovery_codes_encrypted=%, secret_metadata.twofa_secret=% unreadable rows',
+            unreadable_passwords, unreadable_codes, unreadable_totp
+            USING ERRCODE = '22000',
+                  HINT = 'Verify the existing vault key and restore unreadable ciphertext from a trusted backup before retrying. No rows were skipped or erased.';
+    END IF;
+END;
+$preflight$;
 
 -- 1. Passwords (secrets.password_encrypted).
 UPDATE public.secrets
