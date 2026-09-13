@@ -16,7 +16,9 @@
 --   [] for a bad recovery-codes cell. The three listing RPCs now read the
 --   password through it and the recovery codes through the existing
 --   safe_decrypt_recovery_codes, so a single corrupt row surfaces as one secret
---   with a null password / empty codes while every other secret still loads.
+--   with an empty password / empty codes while every other secret still loads.
+--   RPC passwords remain non-null strings for installed desktop clients, whose
+--   SecretEntry and SecretEntryWithSharing models cannot decode a null password.
 --
 --   NOT named safe_decrypt_*: the key-rotation script
 --   (supabase/ops/rotate_master_encryption_key.sql) treats every public
@@ -31,7 +33,7 @@
 --   calls changed; every authorization source, the paging tiebreaker and the
 --   RETURNS TABLE shape are unchanged. Read authority is unchanged - only what a
 --   reader already entitled to a row sees when that row cannot be decrypted. The
---   failure is now silent per row: monitor for a null password on a non-null
+--   failure is now silent per row: monitor try_decrypt_text returning NULL on a non-null
 --   password_encrypted, and note rotation still fails closed on the same rows
 --   because it reads through decrypt_text, not this wrapper.
 -- ============================================================================
@@ -39,7 +41,7 @@
 -- Function: try_decrypt_text - decrypt_text, but NULL instead of RAISE on failure.
 CREATE OR REPLACE FUNCTION "public"."try_decrypt_text"("ciphertext" "text") RETURNS "text"
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
-    SET "search_path" TO 'public, pg_catalog'
+    SET "search_path" TO ''
     AS $BODY$
 BEGIN
     IF ciphertext IS NULL THEN
@@ -51,6 +53,8 @@ BEGIN
         WHEN OTHERS THEN
             -- Corrupt data, a wrong key mid-rotation, or a v2 integrity failure:
             -- blank this one field rather than abort the caller's whole listing.
+            -- Report only SQLSTATE: error messages may contain secret material.
+            RAISE WARNING 'Secret decryption failed (SQLSTATE %)', SQLSTATE;
             RETURN NULL;
     END;
 END;
@@ -61,7 +65,7 @@ COMMENT ON FUNCTION "public"."try_decrypt_text"("ciphertext" "text") IS
     'decrypt_text that returns NULL instead of raising, so one undecryptable row does not abort a secret listing. Not a safe_decrypt_* rotation adapter.';
 -- Same client posture as decrypt_text (20260909120000): called only inside these
 -- SECURITY DEFINER RPCs, never directly by a client.
-REVOKE ALL ON FUNCTION "public"."try_decrypt_text"("ciphertext" "text") FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION "public"."try_decrypt_text"("ciphertext" "text") FROM PUBLIC, anon, authenticated, service_role;
 
 
 -- (a) get_user_secrets - restated from 20260907000000; decrypt calls only.
@@ -81,7 +85,7 @@ BEGIN
     RETURN QUERY
     SELECT
         s.id, s.website, s.username,
-        public.try_decrypt_text(s.password_encrypted) AS password,
+        COALESCE(public.try_decrypt_text(s.password_encrypted), '') AS password,
         s.notes, s.expiration_date,
         COALESCE((SELECT jsonb_agg(st.tag) FROM public.secret_tags st WHERE st.secret_id = s.id), '[]'::jsonb) AS tags,
         COALESCE((
@@ -111,8 +115,6 @@ $$;
 
 ALTER FUNCTION "public"."get_user_secrets"(integer,integer) OWNER TO "postgres";
 
-ALTER FUNCTION "public"."get_user_secrets"(integer,integer) OWNER TO "postgres";
-
 
 -- (b) search_user_secrets - restated from 20260907000000; decrypt calls only.
 CREATE OR REPLACE FUNCTION "public"."search_user_secrets"(
@@ -132,7 +134,7 @@ BEGIN
     RETURN QUERY
     SELECT
         s.id, s.website, s.username,
-        public.try_decrypt_text(s.password_encrypted) AS password,
+        COALESCE(public.try_decrypt_text(s.password_encrypted), '') AS password,
         s.notes, s.expiration_date,
         COALESCE((SELECT jsonb_agg(st.tag) FROM public.secret_tags st WHERE st.secret_id = s.id), '[]'::jsonb) AS tags,
         COALESCE((
@@ -159,8 +161,6 @@ BEGIN
     LIMIT p_limit OFFSET p_offset;
 END;
 $$;
-
-ALTER FUNCTION "public"."search_user_secrets"("text",integer,integer) OWNER TO "postgres";
 
 ALTER FUNCTION "public"."search_user_secrets"("text",integer,integer) OWNER TO "postgres";
 
@@ -241,7 +241,7 @@ BEGIN
     )
     SELECT
         s.id, s.website, s.username,
-        public.try_decrypt_text(s.password_encrypted) AS password,
+        COALESCE(public.try_decrypt_text(s.password_encrypted), '') AS password,
         s.notes, s.expiration_date,
         COALESCE((SELECT jsonb_agg(st.tag) FROM public.secret_tags st WHERE st.secret_id = s.id), '[]'::jsonb) AS tags,
         COALESCE((
@@ -269,8 +269,6 @@ BEGIN
     LIMIT p_limit OFFSET p_offset;
 END;
 $$;
-
-ALTER FUNCTION "public"."get_user_secrets_with_shared"(integer,integer) OWNER TO "postgres";
 
 ALTER FUNCTION "public"."get_user_secrets_with_shared"(integer,integer) OWNER TO "postgres";
 

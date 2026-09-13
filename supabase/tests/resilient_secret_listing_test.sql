@@ -11,7 +11,7 @@
 -- failure), so one bad row surfaces as one blanked field while the rest load.
 
 begin;
-select plan(11);
+select plan(17);
 
 select vault.create_secret(
     'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
@@ -20,7 +20,8 @@ select vault.create_secret(
 );
 
 insert into auth.users (id, email) values
-    ('cafe0000-0000-4000-8000-000000000001', 'listing-owner@pgtap.test');
+    ('cafe0000-0000-4000-8000-000000000001', 'listing-owner@pgtap.test'),
+    ('cafe0000-0000-4000-8000-000000000002', 'listing-sharer@pgtap.test');
 
 -- A readable secret, a secret whose password ciphertext is corrupt, and a secret
 -- whose recovery codes are corrupt. The password rows are inserted directly (as
@@ -31,6 +32,10 @@ insert into public.secrets (id, user_id, website, username, password_encrypted) 
     ('cafe0000-0000-4000-8000-0000000000a3', 'cafe0000-0000-4000-8000-000000000001', 'codes.example', 'u3', public.encrypt_text('GoodPassword3'));
 insert into public.secret_metadata (secret_id, twofa_enabled, twofa_type, recovery_codes_encrypted) values
     ('cafe0000-0000-4000-8000-0000000000a3', true, 'app', '###corrupt-codes###');
+insert into public.secrets (id, user_id, website, username, password_encrypted) values
+    ('cafe0000-0000-4000-8000-0000000000a4', 'cafe0000-0000-4000-8000-000000000002', 'shared.example', 'u4', '!!!not-valid-base64!!!');
+insert into public.secret_shares (secret_id, shared_with_user_id, shared_by, access_level) values
+    ('cafe0000-0000-4000-8000-0000000000a4', 'cafe0000-0000-4000-8000-000000000001', 'cafe0000-0000-4000-8000-000000000002', 'read');
 
 -- 1-2. try_decrypt_text is decrypt_text with NULL instead of a raise.
 select is(public.try_decrypt_text(public.encrypt_text('round-trip')), 'round-trip',
@@ -52,20 +57,30 @@ select set_config('request.jwt.claims',
 -- 4. get_user_secrets returns EVERY row rather than aborting on the bad one.
 select is((select count(*) from public.get_user_secrets(50, 0)), 3::bigint,
     'get_user_secrets returns all rows despite a corrupt one');
--- 5-6. The good password decrypts; the corrupt one is a NULL password, not an error.
+-- 5-6. Keep the RPC's string contract: installed clients cannot decode NULL.
 select is((select password from public.get_user_secrets(50, 0) where website = 'good.example'),
     'GoodPassword1', 'the readable password still decrypts');
 select is((select password from public.get_user_secrets(50, 0) where website = 'broken.example'),
-    NULL::text, 'the corrupt password is blanked, not fatal');
+    ''::text, 'the corrupt password is blanked, not fatal');
 -- 7. Corrupt recovery codes degrade to [] through safe_decrypt_recovery_codes.
-select is((select metadata->>'recovery_codes' from public.get_user_secrets(50, 0) where website = 'codes.example'),
-    '[]', 'corrupt recovery codes degrade to an empty array');
+select is((select metadata->'recovery_codes' from public.get_user_secrets(50, 0) where website = 'codes.example'),
+    '[]'::jsonb, 'corrupt recovery codes degrade to an empty JSON array');
 
 -- 8-9. The same resilience holds for the other two listing RPCs.
 select is((select count(*) from public.search_user_secrets('.example', 50, 0)), 3::bigint,
     'search_user_secrets returns all matching rows despite a corrupt one');
-select is((select count(*) from public.get_user_secrets_with_shared(50, 0)), 3::bigint,
+select is((select count(*) from public.get_user_secrets_with_shared(50, 0)), 4::bigint,
     'get_user_secrets_with_shared returns all rows despite a corrupt one');
+select is((select password from public.search_user_secrets('.example', 50, 0) where website = 'broken.example'),
+    ''::text, 'search preserves the non-null password contract');
+select is((select password from public.get_user_secrets_with_shared(50, 0) where website = 'broken.example'),
+    ''::text, 'sharing list preserves the non-null password contract');
+select is((select password from public.get_user_secrets_with_shared(50, 0) where website = 'shared.example'),
+    ''::text, 'a corrupt direct share stays visible with a blank password');
+select is((select access_level from public.get_user_secrets_with_shared(50, 0) where website = 'shared.example'),
+    'read', 'a corrupt direct share retains its read-only access level');
+select is((select shared_by_email from public.get_user_secrets_with_shared(50, 0) where website = 'shared.example'),
+    'listing-sharer@pgtap.test', 'a corrupt direct share retains its source');
 
 reset role;
 
@@ -74,6 +89,8 @@ select ok(not has_function_privilege('anon', 'public.try_decrypt_text(text)', 'E
     'anon cannot execute try_decrypt_text');
 select ok(not has_function_privilege('authenticated', 'public.try_decrypt_text(text)', 'EXECUTE'),
     'authenticated cannot execute try_decrypt_text');
+select ok(not has_function_privilege('service_role', 'public.try_decrypt_text(text)', 'EXECUTE'),
+    'service_role cannot execute the internal resilient reader');
 
 select * from finish();
 rollback;
