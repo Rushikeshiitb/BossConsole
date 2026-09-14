@@ -1,5 +1,5 @@
 -- pgTAP tests for resilient secret listing
--- (migration 20260914000000_resilient_secret_listing.sql).
+-- (migration 20260915000000_resilient_secret_listing.sql).
 --
 -- get_user_secrets / search_user_secrets / get_user_secrets_with_shared read the
 -- password with a bare decrypt_text inside a set-returning query. decrypt_text

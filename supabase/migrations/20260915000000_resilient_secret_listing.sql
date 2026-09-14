@@ -1,7 +1,7 @@
 -- ============================================================================
 -- BOSS Database Schema: Resilient Secret Listing (one bad row must not blank a page)
 -- ============================================================================
--- File: 20260914000000_resilient_secret_listing.sql
+-- File: 20260915000000_resilient_secret_listing.sql
 -- Description: get_user_secrets, search_user_secrets and get_user_secrets_with_shared
 --   decrypted the password (and recovery codes) with a bare public.decrypt_text
 --   inside a set-returning query. decrypt_text RAISES on an undecryptable value -
@@ -279,5 +279,5 @@ GRANT EXECUTE ON FUNCTION "public"."search_user_secrets"("text",integer,integer)
 GRANT EXECUTE ON FUNCTION "public"."get_user_secrets_with_shared"(integer,integer)   TO "authenticated", "service_role";
 
 -- ============================================================================
--- End of File: 20260914000000_resilient_secret_listing.sql
+-- End of File: 20260915000000_resilient_secret_listing.sql
 -- ============================================================================
