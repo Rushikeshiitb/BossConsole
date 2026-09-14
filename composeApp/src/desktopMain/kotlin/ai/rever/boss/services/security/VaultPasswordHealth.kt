@@ -192,12 +192,13 @@ object VaultPasswordHealth {
         val target = suffix.uppercase(Locale.ROOT)
         for (rawLine in rangeBody.lineSequence()) {
             val line = rawLine.trim()
-            if (line.isEmpty()) continue
             val sep = line.indexOf(':')
-            if (sep <= 0) continue
-            val hashSuffix = line.substring(0, sep).trim().uppercase(Locale.ROOT)
-            if (hashSuffix != target) continue
-            return line.substring(sep + 1).trim().toLongOrNull() ?: 0L
+            // One exit only: matching a `HASHSUFFIX:COUNT` line returns its count.
+            // Blank/malformed lines (sep <= 0) and non-matching suffixes simply fall
+            // through to the next line rather than each taking their own `continue`.
+            if (sep > 0 && line.substring(0, sep).trim().uppercase(Locale.ROOT) == target) {
+                return line.substring(sep + 1).trim().toLongOrNull() ?: 0L
+            }
         }
         return 0L
     }
