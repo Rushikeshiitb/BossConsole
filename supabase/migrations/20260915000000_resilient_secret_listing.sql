@@ -5,13 +5,12 @@
 -- Description: get_user_secrets, search_user_secrets and get_user_secrets_with_shared
 --   decrypted the password (and recovery codes) with a bare public.decrypt_text
 --   inside a set-returning query. decrypt_text RAISES on an undecryptable value -
---   a wrong key after a partial rotation, storage corruption, or a v2 MAC
---   mismatch - and one raised row aborts the WHOLE query, so a single bad row
+--   a wrong key after a partial rotation or storage corruption - and one raised row aborts the WHOLE query, so a single bad row
 --   made every one of the caller's secrets fail to load, not just the bad one.
 --   twofa_secret was already read through safe_decrypt_twofa_secret (NULL on
 --   failure); recovery codes and passwords were not.
 --
---   This adds public.try_decrypt_text(text): decrypt_text wrapped so any failure
+--   This adds public.try_decrypt_text(text): decrypt_text wrapped so a data decoding failure
 --   yields NULL for that one field, exactly as safe_decrypt_recovery_codes yields
 --   [] for a bad recovery-codes cell. The three listing RPCs now read the
 --   password through it and the recovery codes through the existing
@@ -33,25 +32,37 @@
 --   calls changed; every authorization source, the paging tiebreaker and the
 --   RETURNS TABLE shape are unchanged. Read authority is unchanged - only what a
 --   reader already entitled to a row sees when that row cannot be decrypted. The
---   failure is now silent per row: monitor try_decrypt_text returning NULL on a non-null
+--   failure emits a SQLSTATE-only warning: monitor NULL on a non-null
 --   password_encrypted, and note rotation still fails closed on the same rows
 --   because it reads through decrypt_text, not this wrapper.
 -- ============================================================================
+
+-- Missing/malformed/empty keys and privilege/undefined-function/internal errors
+-- propagate. A valid-but-wrong key is indistinguishable from damaged ciphertext
+-- in the unauthenticated legacy/v2 formats from #647; this is not key validation
+-- or authenticated encryption. Rotation retains its strict decoder.
 
 -- Function: try_decrypt_text - decrypt_text, but NULL instead of RAISE on failure.
 CREATE OR REPLACE FUNCTION "public"."try_decrypt_text"("ciphertext" "text") RETURNS "text"
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $BODY$
+DECLARE
+    key_bytes bytea;
 BEGIN
     IF ciphertext IS NULL THEN
         RETURN NULL;
     END IF;
+    -- Validate key lookup/encoding outside the corrupt-row boundary.
+    key_bytes := public.get_encryption_key()::bytea;
+    IF key_bytes IS NULL OR octet_length(key_bytes) = 0 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Secret encryption key configuration is invalid';
+    END IF;
     BEGIN
         RETURN public.decrypt_text(ciphertext);
     EXCEPTION
-        WHEN OTHERS THEN
-            -- Corrupt data, a wrong key mid-rotation, or a v2 integrity failure:
+        WHEN SQLSTATE '22023' OR SQLSTATE '22021' OR SQLSTATE '39000' THEN
+            -- Invalid base64/UTF-8 or pgcrypto decryption failure:
             -- blank this one field rather than abort the caller's whole listing.
             -- Report only SQLSTATE: error messages may contain secret material.
             RAISE WARNING 'Secret decryption failed (SQLSTATE %)', SQLSTATE;

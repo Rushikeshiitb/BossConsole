@@ -11,7 +11,7 @@
 -- failure), so one bad row surfaces as one blanked field while the rest load.
 
 begin;
-select plan(17);
+select plan(23);
 
 select vault.create_secret(
     'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
@@ -47,7 +47,7 @@ select is(public.try_decrypt_text('!!!not-valid-base64!!!'), NULL::text,
 --    behaviour the RPCs used to inherit.
 select throws_ok(
     $$ SELECT public.decrypt_text(password_encrypted) FROM public.secrets $$,
-    NULL, NULL,
+    NULL::text, NULL::text,
     'bare decrypt_text over the set still aborts on the corrupt row');
 
 set local role authenticated;
@@ -91,6 +91,32 @@ select ok(not has_function_privilege('authenticated', 'public.try_decrypt_text(t
     'authenticated cannot execute try_decrypt_text');
 select ok(not has_function_privilege('service_role', 'public.try_decrypt_text(text)', 'EXECUTE'),
     'service_role cannot execute the internal resilient reader');
+
+-- Inject systemic failures without touching Vault data; transaction rollback restores functions.
+CREATE OR REPLACE FUNCTION public.get_encryption_key() RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN
+    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'synthetic unavailable key';
+END $$;
+select throws_ok($$select public.try_decrypt_text('invalid')$$, 'P0001', NULL::text,
+    'missing key propagates instead of blanking the page');
+CREATE OR REPLACE FUNCTION public.get_encryption_key() RETURNS text
+LANGUAGE sql SECURITY DEFINER AS $$ SELECT ''::text $$;
+select throws_ok($$select public.try_decrypt_text('invalid')$$, '22023', NULL::text,
+    'empty key fails outside the row handler');
+CREATE OR REPLACE FUNCTION public.get_encryption_key() RETURNS text
+LANGUAGE sql SECURITY DEFINER AS $$ SELECT 'synthetic-test-key'::text $$;
+CREATE OR REPLACE FUNCTION public.decrypt_text(ciphertext text) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN
+    RAISE EXCEPTION USING ERRCODE = ciphertext, MESSAGE = 'synthetic systemic failure';
+END $$;
+select throws_ok($$select public.try_decrypt_text('42501')$$, '42501', NULL::text,
+    'privilege errors propagate');
+select throws_ok($$select public.try_decrypt_text('42883')$$, '42883', NULL::text,
+    'missing decoder propagates');
+select throws_ok($$select public.try_decrypt_text('XX000')$$, 'XX000', NULL::text,
+    'internal errors propagate');
+select is(public.try_decrypt_text('39000'), NULL::text,
+    'pgcrypto corrupt-ciphertext errors retain field fallback');
 
 select * from finish();
 rollback;
