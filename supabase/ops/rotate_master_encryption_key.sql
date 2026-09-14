@@ -50,6 +50,15 @@ declare
   -- are read through safe_decrypt_* wrappers that tolerate formats plain
   -- decrypt_text does not, so verifying them with decrypt_text would prove
   -- something nobody relies on.
+  --
+  -- One deliberate carve-out to that rule: secrets.password_encrypted is mapped
+  -- to public.decrypt_text below, even though the application's LISTING path now
+  -- reads passwords through public.try_decrypt_text (20260915000000), which
+  -- returns NULL instead of raising. That resilient reader exists so one corrupt
+  -- row does not blank a whole page; rotation is the opposite job and must fail
+  -- CLOSED, so it verifies with the strict decrypt_text and refuses to advance
+  -- past a row it cannot decrypt. The map stays decrypt_text on purpose - do not
+  -- "align" it with try_decrypt_text.
   cols text[][] := array[
     array['secrets','password_encrypted','id','','public.decrypt_text'],
     array['secret_metadata','recovery_codes_encrypted','id','','public.safe_decrypt_recovery_codes'],

@@ -9,6 +9,15 @@
 -- routes the password through try_decrypt_text (NULL on failure) and the
 -- recovery codes through the existing safe_decrypt_recovery_codes ([] on
 -- failure), so one bad row surfaces as one blanked field while the rest load.
+--
+-- COMPANION SUITE - do not delete either as a "duplicate". This file and
+-- supabase/tests/secret_listing_decryption_resilience_test.sql (from PR #652 by
+-- Akash Jadon) overlap on the happy path but each holds cases the other does
+-- not. Unique to THIS file: the synthetic systemic-failure cases below that pin
+-- a missing/empty key, a revoked EXECUTE, a dropped decrypt_text and an internal
+-- error still PROPAGATE (they must abort the listing, not blank every row).
+-- Unique to that file: the oracle-denial throws_ok on a client calling
+-- try_decrypt_text directly. Removing one loses half the coverage.
 
 begin;
 select plan(23);

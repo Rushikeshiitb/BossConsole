@@ -32,9 +32,13 @@
 --   calls changed; every authorization source, the paging tiebreaker and the
 --   RETURNS TABLE shape are unchanged. Read authority is unchanged - only what a
 --   reader already entitled to a row sees when that row cannot be decrypted. The
---   failure emits a SQLSTATE-only warning: monitor NULL on a non-null
---   password_encrypted, and note rotation still fails closed on the same rows
---   because it reads through decrypt_text, not this wrapper.
+--   failure emits a SQLSTATE-only server warning
+--   ('Secret decryption failed (SQLSTATE %)'). The RPCs COALESCE the helper's
+--   NULL to '', so an installed client still decodes: the client-visible signal
+--   is therefore an EMPTY password on a non-null password_encrypted, not a NULL,
+--   and the authoritative signal is that server warning. Rotation still fails
+--   closed on the same rows because it reads through decrypt_text, not this
+--   wrapper.
 -- ============================================================================
 
 -- Missing/malformed/empty keys and privilege/undefined-function/internal errors
@@ -61,9 +65,17 @@ BEGIN
     BEGIN
         RETURN public.decrypt_text(ciphertext);
     EXCEPTION
-        WHEN SQLSTATE '22023' OR SQLSTATE '22021' OR SQLSTATE '39000' THEN
-            -- Invalid base64/UTF-8 or pgcrypto decryption failure:
-            -- blank this one field rather than abort the caller's whole listing.
+        WHEN data_exception OR external_routine_invocation_exception THEN
+            -- The VALUE is bad, not the system. These are condition names, i.e.
+            -- CLASS matches (not exact SQLSTATEs): data_exception is all of class
+            -- 22 (invalid base64 22023, invalid/untranslatable UTF-8 22021/22P05)
+            -- and external_routine_invocation_exception is all of class 39 (the
+            -- pgcrypto decryption failure). A systemic fault stays uncaught and so
+            -- still aborts the listing: a malformed key raises 22P02 on the
+            -- get_encryption_key()::bytea cast ABOVE this block, and a missing key
+            -- (P0001), a revoked EXECUTE (42501), a dropped decrypt_text (42883)
+            -- or an internal error (XX000) are outside both classes.
+            -- Blank this one field rather than abort the caller's whole listing.
             -- Report only SQLSTATE: error messages may contain secret material.
             RAISE WARNING 'Secret decryption failed (SQLSTATE %)', SQLSTATE;
             RETURN NULL;

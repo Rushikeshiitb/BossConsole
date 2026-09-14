@@ -1,4 +1,14 @@
 -- pgTAP regression tests for fail-soft secret list decryption.
+-- Contributed in PR #652 by Akash Jadon <contact@evolnex.digital>, consolidated
+-- alongside the original resilient-listing work (migration 20260915000000).
+--
+-- COMPANION SUITE - do not delete either as a "duplicate". This file and
+-- supabase/tests/resilient_secret_listing_test.sql overlap on the happy path but
+-- each holds cases the other does not. Unique to THIS file: the oracle-denial
+-- throws_ok on a client calling try_decrypt_text directly. Unique to that file:
+-- the synthetic systemic-failure cases pinning that a missing/empty key, a
+-- revoked EXECUTE, a dropped decrypt_text and an internal error still PROPAGATE.
+-- Removing one loses half the coverage.
 begin;
 select plan(17);
 
