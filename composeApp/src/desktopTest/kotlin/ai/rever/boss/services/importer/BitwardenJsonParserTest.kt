@@ -52,6 +52,30 @@ class BitwardenJsonParserTest {
     }
 
     @Test
+    fun `a password is read verbatim, keeping edge whitespace`() {
+        val json =
+            """
+            { "encrypted": false, "items": [
+              { "type": 1, "name": "Spaced",
+                "login": { "username": "u", "password": "  pa ss  " } }
+            ]}
+            """.trimIndent()
+        assertEquals("  pa ss  ", BitwardenJsonParser.parse(json).single().password)
+    }
+
+    @Test
+    fun `an all-whitespace password is preserved, not dropped`() {
+        val json =
+            """
+            { "encrypted": false, "items": [
+              { "type": 1, "name": "Spaces",
+                "login": { "username": "u", "password": "   " } }
+            ]}
+            """.trimIndent()
+        assertEquals("   ", BitwardenJsonParser.parse(json).single().password)
+    }
+
+    @Test
     fun `sniffing recognises a Bitwarden export and rejects other text`() {
         assertTrue(BitwardenJsonParser.looksLikeBitwarden(export))
         assertFalse(BitwardenJsonParser.looksLikeBitwarden("url,username,password\na,b,c"))

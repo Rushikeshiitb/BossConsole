@@ -65,7 +65,10 @@ object BitwardenJsonParser {
     private fun loginOf(item: JsonObject): ImportedPassword? {
         val isLogin = item["type"]?.jsonPrimitive?.intOrNull == TYPE_LOGIN
         val login = item["login"] as? JsonObject
-        val password = login?.string("password").orEmpty()
+        // Read the password verbatim: edge whitespace is part of a password, not
+        // formatting, so it must not be trimmed away (and an all-spaces password
+        // must not be dropped as if it were absent).
+        val password = login?.rawString("password").orEmpty()
         if (!isLogin || login == null || password.isEmpty()) return null
 
         val website = firstUri(login) ?: item.string("name").orEmpty()
@@ -86,11 +89,14 @@ object BitwardenJsonParser {
             .firstOrNull { it.isNotBlank() }
     }
 
-    /** A string field, trimmed, or null when absent, JSON null, or blank. */
+    /** A string field, trimmed, or null when absent, JSON null, or blank. For labels (website/username/notes). */
     private fun JsonObject.string(key: String): String? =
         this[key]
             ?.jsonPrimitive
             ?.contentOrNull
             ?.trim()
             ?.ifEmpty { null }
+
+    /** A string field verbatim (no trimming), or null when absent or JSON null. For the password. */
+    private fun JsonObject.rawString(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
 }

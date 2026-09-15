@@ -53,6 +53,14 @@ class ImportFileReaderFormatTest {
     }
 
     @Test
+    fun `a CSV whose field contains the KeePass marker still parses as CSV`() {
+        val csv = "url,username,password,notes\nhttps://x.com,john,hunter2,\"see <KeePassFile> note\"\n"
+        val preview = ImportFileReader.parseContent("passwords.csv", csv).getOrThrow()
+        assertEquals(1, preview.passwords.size)
+        assertEquals("john", preview.passwords.first().username)
+    }
+
+    @Test
     fun `an unrecognised file fails with a clear error`() {
         val result = ImportFileReader.parseContent("mystery.txt", "just some prose, nothing structured")
         assertTrue(result.isFailure)

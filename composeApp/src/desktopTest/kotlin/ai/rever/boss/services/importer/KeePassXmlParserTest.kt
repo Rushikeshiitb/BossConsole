@@ -84,7 +84,15 @@ class KeePassXmlParserTest {
     @Test
     fun `sniffing recognises a KeePass export and rejects other text`() {
         assertTrue(KeePassXmlParser.looksLikeKeePass(export))
+        assertTrue(KeePassXmlParser.looksLikeKeePass("<KeePassFile><Root/></KeePassFile>"), "no xml declaration")
         assertFalse(KeePassXmlParser.looksLikeKeePass("<html><body>not keepass</body></html>"))
+    }
+
+    @Test
+    fun `a CSV whose data merely contains the marker is not misrouted to KeePass`() {
+        // The marker appears inside a field, not as the document root.
+        val csv = "url,username,password,notes\nhttps://x.com,u,p,\"<KeePassFile fake>\"\n"
+        assertFalse(KeePassXmlParser.looksLikeKeePass(csv), "root anchoring: a field value is not the root element")
     }
 
     @Test

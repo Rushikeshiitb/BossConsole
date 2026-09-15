@@ -57,8 +57,23 @@ object KeePassXmlParser {
         return out
     }
 
-    /** A cheap sniff for routing: the root element's name. */
-    fun looksLikeKeePass(text: String): Boolean = text.contains("<KeePassFile", ignoreCase = true)
+    /**
+     * A cheap sniff for routing: the document's ROOT element is `<KeePassFile>`.
+     *
+     * Anchored at the start (past an optional BOM, XML declaration and comments)
+     * rather than searching the whole text - otherwise a CSV or bookmark file
+     * whose data merely contains the string `<KeePassFile` would be misrouted to
+     * this parser and rejected instead of read as CSV.
+     */
+    // A leading BOM is stripped first (written as an escape: a literal U+FEFF is
+    // invisible and ktlintFormat would silently remove it).
+    fun looksLikeKeePass(text: String): Boolean = ROOT_ELEMENT.containsMatchIn(text.removePrefix("\uFEFF"))
+
+    private val ROOT_ELEMENT =
+        Regex(
+            """\A\s*(?:<\?xml\b[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<KeePassFile\b""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
 
     /** Walk [node]'s child groups and entries, skipping the Recycle Bin group. */
     private fun collectFrom(
