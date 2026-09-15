@@ -14,6 +14,7 @@ import ai.rever.boss.components.home.LocalRegistryAccess
 import ai.rever.boss.components.home.LocalTabRegistry
 import ai.rever.boss.components.model.BossDraggableComponent
 import ai.rever.boss.components.overlays.DraggingItemOverlay
+import ai.rever.boss.components.overlays.HeavyweightModalRegistry
 import ai.rever.boss.components.overlays.OverlayCorner
 import ai.rever.boss.components.overlays.TabDraggingOverlay
 import ai.rever.boss.components.plugin.LocalPanelPluginIdResolver
@@ -63,6 +64,7 @@ import ai.rever.boss.updater.UpdateBanner
 import ai.rever.boss.updater.UpdateState
 import ai.rever.boss.updater.drawsBanner
 import ai.rever.boss.updater.rememberUpdateDialogOwnership
+import ai.rever.boss.updater.shouldShowUpdateDialog
 import ai.rever.boss.utils.SystemUtils
 import ai.rever.boss.window.LocalWindowGitState
 import ai.rever.boss.window.LocalWindowId
@@ -571,7 +573,26 @@ internal fun BossAppScaffold(
                 val showUpdateDialog by updateHandle.showUpdateDialog.collectAsState()
                 val isUpdateDialogOwner = rememberUpdateDialogOwnership(state.windowId)
                 val updateStateForDialog = updateState
-                if (showUpdateDialog && isUpdateDialogOwner && updateStateForDialog is UpdateState.UpdateAvailable) {
+                // The update prompt is the one dialog that appears on its own timer, so it must not
+                // stack a second always-on-top window over a modal the user is already dealing with
+                // (BossConsole#696). It yields to any other heavyweight modal, in either direction,
+                // and reappears once that modal closes. HeavyweightModalRegistry counts this prompt
+                // too, so its own window is subtracted out. Count is always 0 on the lightweight
+                // path, so this leaves that path unchanged.
+                var updateDialogShowing by remember { mutableStateOf(false) }
+                val showUpdateDialogNow =
+                    shouldShowUpdateDialog(
+                        wantDialog = showUpdateDialog,
+                        isOwner = isUpdateDialogOwner,
+                        updateAvailable = updateStateForDialog is UpdateState.UpdateAvailable,
+                        openHeavyweightModals = HeavyweightModalRegistry.openCount,
+                        updateDialogShowing = updateDialogShowing,
+                    )
+                if (showUpdateDialogNow && updateStateForDialog is UpdateState.UpdateAvailable) {
+                    DisposableEffect(Unit) {
+                        updateDialogShowing = true
+                        onDispose { updateDialogShowing = false }
+                    }
                     UpdateAvailableDialog(
                         updateInfo = updateStateForDialog.updateInfo,
                         onUpdateNow = {

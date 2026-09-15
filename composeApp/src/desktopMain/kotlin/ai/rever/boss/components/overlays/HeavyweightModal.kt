@@ -81,6 +81,15 @@ fun HeavyweightModal(
         EnsureOverlayWindowTransparent(window, kind = "modal")
         ApplyBossWindowIcon(window)
 
+        // Count this modal for the lifetime of its window, so an autonomous dialog (the app-update
+        // prompt) can refuse to stack a second always-on-top window over a modal already on screen.
+        // See HeavyweightModalRegistry and BossConsole#696. UI-thread DisposableEffect, matching the
+        // popup counter's contract.
+        DisposableEffect(Unit) {
+            HeavyweightModalRegistry.acquire()
+            onDispose { HeavyweightModalRegistry.release() }
+        }
+
         // Dismiss when the modal loses focus (clicked elsewhere), matching modal expectations —
         // but NOT when one of our own heavyweight popups took the focus.
         //
