@@ -26,7 +26,14 @@ class PluginToastAutoDismissPauseTest {
         toastState = PluginToastState(testScope, maxToasts = 3)
     }
 
-    private fun short(id: String) = ToastMessage(id = id, type = ToastType.INFO, title = id, message = id, duration = ToastDuration.SHORT)
+    private fun short(id: String) =
+        ToastMessage(
+            id = id,
+            type = ToastType.INFO,
+            title = id,
+            message = id,
+            duration = ToastDuration.SHORT,
+        )
 
     @Test
     fun `INDEFINITE has no auto-dismiss delay`() {
