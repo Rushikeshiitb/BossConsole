@@ -61,6 +61,82 @@ class ImportFileReaderFormatTest {
     }
 
     @Test
+    fun `Bitwarden preview reports incomplete and native-app rows before import`() {
+        val json = """{"items":[
+            {"type":1,"name":"example.test","login":{"username":"u","password":"  keep  "}},
+            {"type":1,"name":"example.test","login":{"password":"p"}},
+            {"type":1,"name":"example.test","login":{"username":"u","password":""}},
+            {"type":1,"login":{"username":"u","password":"p","uris":[{"uri":"androidapp://com.example"}]}},
+            {"type":1,"login":{"username":"u","password":"p","uris":[{"uri":"iosapp://com.example"}]}}
+        ]}"""
+        val preview = ImportFileReader.parseContent("vault.json", json).getOrThrow()
+        assertEquals("  keep  ", preview.passwords.single().password)
+        assertEquals(
+            listOf(
+                SkipReason.MISSING_USERNAME,
+                SkipReason.MISSING_PASSWORD,
+                SkipReason.MISSING_URL,
+                SkipReason.MISSING_URL,
+            ),
+            preview.skipped.map { it.reason },
+        )
+    }
+
+    @Test
+    fun `whitespace-only passwords are skipped to match the vault request contract`() {
+        val json = """{"items":[{"type":1,"name":"example.test",
+            "login":{"username":"u","password":"   "}}]}"""
+        val preview = ImportFileReader.parseContent("vault.json", json).getOrThrow()
+        assertTrue(preview.passwords.isEmpty())
+        assertEquals(SkipReason.MISSING_PASSWORD, preview.skipped.single().reason)
+        val csv = "url,username,password\nexample.test,u,   \n"
+        val csvPreview = ImportFileReader.parseContent("vault.csv", csv).getOrThrow()
+        assertEquals(SkipReason.MISSING_PASSWORD, csvPreview.skipped.single().reason)
+    }
+
+    @Test
+    fun `a web URI after an app association is retained`() {
+        val json = """{"items":[{"type":1,"login":{"username":"u","password":"p",
+            "uris":[{"uri":"androidapp://com.example"},{"uri":"https://example.test"}]}}]}"""
+        val preview = ImportFileReader.parseContent("vault.json", json).getOrThrow()
+        assertEquals("https://example.test", preview.passwords.single().website)
+    }
+
+    @Test
+    fun `malformed JSON fields cannot escape as credential-bearing exceptions`() {
+        val json = """{"items":[{"type":1,"name":"example.test",
+            "login":{"username":"u","password":{"synthetic-secret":"value"}}}]}"""
+        val preview = ImportFileReader.parseContent("vault.json", json).getOrThrow()
+        assertTrue(preview.passwords.isEmpty())
+        assertEquals(SkipReason.MISSING_PASSWORD, preview.skipped.single().reason)
+        val invalidHeader = """{"encrypted":{"synthetic-secret":"value"},"items":[]}"""
+        val failure = ImportFileReader.parseContent("vault.json", invalidHeader).exceptionOrNull()
+        assertTrue(failure is UnrecognisedImportFileException)
+        assertTrue(
+            failure.message
+                .orEmpty()
+                .contains("synthetic-secret")
+                .not(),
+        )
+    }
+
+    @Test
+    fun `KeePass preview explains incomplete credentials`() {
+        val xml = """<KeePassFile><Root><Group><Entry>
+            <String><Key>Title</Key><Value>example.test</Value></String>
+            <String><Key>Password</Key><Value>p</Value></String>
+            </Entry><Entry><String><Key>Title</Key><Value>example.test</Value></String>
+            <String><Key>UserName</Key><Value>u</Value></String></Entry>
+            </Group></Root></KeePassFile>"""
+        val preview = ImportFileReader.parseContent("vault.xml", xml).getOrThrow()
+        assertTrue(preview.passwords.isEmpty())
+        assertEquals(
+            listOf(SkipReason.MISSING_USERNAME, SkipReason.MISSING_PASSWORD),
+            preview.skipped.map { it.reason },
+        )
+    }
+
+    @Test
     fun `an unrecognised file fails with a clear error`() {
         val result = ImportFileReader.parseContent("mystery.txt", "just some prose, nothing structured")
         assertTrue(result.isFailure)

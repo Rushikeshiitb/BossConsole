@@ -3,10 +3,9 @@ package ai.rever.boss.services.importer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Reads a Bitwarden unencrypted JSON export (`Tools > Export vault`, "json").
@@ -44,12 +43,15 @@ object BitwardenJsonParser {
      * An encrypted export (`"encrypted": true`) has no readable passwords, so it
      * returns empty rather than a list of ciphertext masquerading as credentials.
      */
-    fun parse(text: String): List<ImportedPassword> {
+    fun parse(text: String): List<ImportedPassword> = parseEntries(text).filter { it.password.isNotEmpty() }
+
+    /** Includes incomplete logins so the preview can explain why they are skipped. */
+    internal fun parseEntries(text: String): List<ImportedPassword> {
         val root = runCatching { json.parseToJsonElement(text) as? JsonObject }.getOrNull()
         // An encrypted export (`"encrypted": true`) has no readable passwords.
         val items =
             root
-                ?.takeIf { it["encrypted"]?.jsonPrimitive?.contentOrNull != "true" }
+                ?.takeIf { it["encrypted"] == null || (it["encrypted"] as? JsonPrimitive)?.contentOrNull == "false" }
                 ?.get("items") as? JsonArray
                 ?: return emptyList()
         return items.mapNotNull { element -> (element as? JsonObject)?.let(::loginOf) }
@@ -61,15 +63,15 @@ object BitwardenJsonParser {
         return root["items"] is JsonArray
     }
 
-    /** One item to a credential, or null when it is not a login or carries no password. */
+    /** One login item to a credential, including missing fields for preview validation. */
     private fun loginOf(item: JsonObject): ImportedPassword? {
-        val isLogin = item["type"]?.jsonPrimitive?.intOrNull == TYPE_LOGIN
+        val isLogin = (item["type"] as? JsonPrimitive)?.intOrNull == TYPE_LOGIN
         val login = item["login"] as? JsonObject
         // Read the password verbatim: edge whitespace is part of a password, not
         // formatting, so it must not be trimmed away (and an all-spaces password
         // must not be dropped as if it were absent).
         val password = login?.rawString("password").orEmpty()
-        if (!isLogin || login == null || password.isEmpty()) return null
+        if (!isLogin || login == null) return null
 
         val website = firstUri(login) ?: item.string("name").orEmpty()
         return ImportedPassword(
@@ -80,23 +82,22 @@ object BitwardenJsonParser {
         )
     }
 
-    /** The first login URI, or null when the item lists none. */
+    /** Prefer a web URI to native-app associations, keeping an app-only URI for the skipped preview. */
     private fun firstUri(login: JsonObject): String? {
         val uris = login["uris"] as? JsonArray ?: return null
         return uris
             .asSequence()
             .mapNotNull { (it as? JsonObject)?.string("uri") }
-            .firstOrNull { it.isNotBlank() }
+            .toList()
+            .let { values -> values.firstOrNull { !isNonWebPasswordEntry(it) } ?: values.firstOrNull() }
     }
 
     /** A string field, trimmed, or null when absent, JSON null, or blank. For labels (website/username/notes). */
-    private fun JsonObject.string(key: String): String? =
-        this[key]
-            ?.jsonPrimitive
-            ?.contentOrNull
-            ?.trim()
-            ?.ifEmpty { null }
+    private fun JsonObject.string(key: String): String? = rawString(key)?.trim()?.ifEmpty { null }
 
-    /** A string field verbatim (no trimming), or null when absent or JSON null. For the password. */
-    private fun JsonObject.rawString(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+    /** Only JSON strings are credentials; objects and numeric primitives are not passwords. */
+    private fun JsonObject.rawString(key: String): String? {
+        val value = this[key] as? JsonPrimitive
+        return value?.takeIf { it.isString }?.contentOrNull
+    }
 }

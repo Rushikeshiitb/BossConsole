@@ -82,6 +82,27 @@ class KeePassXmlParserTest {
     }
 
     @Test
+    fun `a disabled Recycle Bin still excludes its deleted entries`() {
+        val disabled = export.replace("<RecycleBinEnabled>True", "<RecycleBinEnabled>False")
+        assertEquals(2, KeePassXmlParser.parse(disabled).size)
+        assertTrue(KeePassXmlParser.parse(disabled).none { it.password == "deletedpw" })
+    }
+
+    @Test
+    fun `BOM is accepted and malformed XML never writes credential fragments to stderr`() {
+        assertEquals(2, KeePassXmlParser.parse("\uFEFF" + export).size)
+        val original = System.err
+        val captured = java.io.ByteArrayOutputStream()
+        try {
+            System.setErr(java.io.PrintStream(captured))
+            assertTrue(KeePassXmlParser.parse("<KeePassFile><synthetic-password></wrong>").isEmpty())
+            assertEquals("", captured.toString())
+        } finally {
+            System.setErr(original)
+        }
+    }
+
+    @Test
     fun `sniffing recognises a KeePass export and rejects other text`() {
         assertTrue(KeePassXmlParser.looksLikeKeePass(export))
         assertTrue(KeePassXmlParser.looksLikeKeePass("<KeePassFile><Root/></KeePassFile>"), "no xml declaration")

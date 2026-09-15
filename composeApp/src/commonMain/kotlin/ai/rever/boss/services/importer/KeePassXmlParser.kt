@@ -3,6 +3,8 @@ package ai.rever.boss.services.importer
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
+import org.xml.sax.SAXParseException
+import org.xml.sax.helpers.DefaultHandler
 import java.io.StringReader
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -46,10 +48,13 @@ object KeePassXmlParser {
      * Every credential in [text], or an empty list when it is not a KeePass XML
      * export or cannot be parsed.
      */
-    fun parse(text: String): List<ImportedPassword> {
+    fun parse(text: String): List<ImportedPassword> = parseEntries(text).filter { it.password.isNotEmpty() }
+
+    /** Includes incomplete entries for the preview, but never history or deleted entries. */
+    internal fun parseEntries(text: String): List<ImportedPassword> {
         val doc = runCatching { secureDocument(text) }.getOrNull()
         val root =
-            doc?.documentElement?.takeIf { it.tagName.equals("KeePassFile", ignoreCase = true) }
+            doc?.documentElement?.takeIf { it.tagName == "KeePassFile" }
                 ?: return emptyList()
 
         val out = mutableListOf<ImportedPassword>()
@@ -71,8 +76,8 @@ object KeePassXmlParser {
 
     private val ROOT_ELEMENT =
         Regex(
-            """\A\s*(?:<\?xml\b[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<KeePassFile\b""",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            """\A\s*(?:<\?xml\b[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<KeePassFile(?:\s|/?>)""",
+            setOf(RegexOption.DOT_MATCHES_ALL),
         )
 
     /** Walk [node]'s child groups and entries, skipping the Recycle Bin group. */
@@ -111,7 +116,6 @@ object KeePassXmlParser {
 
         // Edge whitespace is part of a password, not formatting, so it is not trimmed.
         val password = fields["Password"].orEmpty()
-        if (password.isEmpty()) return null
 
         val url = fields["URL"]?.trim().orEmpty()
         val website = url.ifEmpty { fields["Title"]?.trim().orEmpty() }
@@ -123,12 +127,11 @@ object KeePassXmlParser {
         )
     }
 
-    /** The Recycle Bin group's UUID when the bin is enabled and set, else null. */
+    /** The Recycle Bin group's UUID when set, including a disabled bin with old entries, else null. */
     private fun recycleBinUuid(root: Element): String? {
         val meta = childElement(root, "Meta") ?: return null
-        val enabled = childElement(meta, "RecycleBinEnabled")?.textContent?.trim().equals("True", ignoreCase = true)
         val uuid = childElement(meta, "RecycleBinUUID")?.textContent?.trim()
-        return uuid?.takeIf { enabled && it.isNotEmpty() && it != EMPTY_UUID }
+        return uuid?.takeIf { it.isNotEmpty() && it != EMPTY_UUID }
     }
 
     /** Parse [text] with external entities and DTDs disabled (XXE hardening). */
@@ -139,7 +142,16 @@ object KeePassXmlParser {
         factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
         factory.isXIncludeAware = false
         factory.isExpandEntityReferences = false
-        return factory.newDocumentBuilder().parse(InputSource(StringReader(text)))
+        val builder = factory.newDocumentBuilder()
+        // The default handler writes untrusted XML fragments to stderr on parse errors.
+        builder.setErrorHandler(
+            object : DefaultHandler() {
+                override fun error(error: SAXParseException): Unit = throw error
+
+                override fun fatalError(error: SAXParseException): Unit = throw error
+            },
+        )
+        return builder.parse(InputSource(StringReader(text.removePrefix("\uFEFF"))))
     }
 
     private fun childElements(node: Element): List<Element> {
