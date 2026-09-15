@@ -70,7 +70,7 @@ class SecretDecodingTest {
         // into a property's default - a required field without one still throws. Because these RPCs
         // return LISTS, that throw is all-or-nothing and takes the WHOLE page, which is exactly the
         // outage this PR removes. So try_decrypt_text's NULL is COALESCEd to '' in every listing RPC
-        // (migration 20260915000000) before it can ever reach this decoder.
+        // (migrations 20260914010000 and 20260915000000) before it can ever reach this decoder.
         val payload =
             buildJsonArray {
                 add(
