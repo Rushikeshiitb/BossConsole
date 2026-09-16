@@ -33,7 +33,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -71,8 +71,13 @@ fun PluginToastHost(
     // them, each with its full duration afresh. INDEFINITE toasts have no timer and are unaffected.
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
-    LaunchedEffect(hovered) {
+    DisposableEffect(toastState, hovered) {
         if (hovered) toastState.pauseAutoDismiss() else toastState.resumeAutoDismiss()
+        // The overlay is removed on an empty stack and replaced when window focus changes.
+        // Release its pause even when no pointer-exit event reaches this composition.
+        onDispose {
+            if (hovered) toastState.resumeAutoDismiss()
+        }
     }
 
     Column(
