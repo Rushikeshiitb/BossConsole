@@ -23,4 +23,9 @@ class ToastClipboardTextTest {
         assertEquals("Only a title", toastClipboardText(toast("Only a title", "")))
         assertEquals("Only a message", toastClipboardText(toast("", "Only a message")))
     }
+
+    @Test
+    fun `two blank halves produce no clipboard payload`() {
+        assertEquals("", toastClipboardText(toast("", "")))
+    }
 }

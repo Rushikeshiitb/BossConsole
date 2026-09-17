@@ -1,5 +1,7 @@
 package ai.rever.boss.plugin.sandbox.notification
 
+import ai.rever.boss.plugin.logging.BossLogger
+import ai.rever.boss.plugin.logging.LogCategory
 import ai.rever.boss.plugin.ui.BossThemeColors
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -42,6 +44,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+private val toastLogger = BossLogger.forComponent("PluginToastHost")
 
 /**
  * Host composable for displaying plugin toast notifications.
@@ -172,17 +176,23 @@ fun PluginToast(
                 }
             }
 
-            // Copy button - copies the toast's text so an error or id is not lost on dismiss.
-            IconButton(
-                onClick = { clipboard.setText(AnnotatedString(toastClipboardText(message))) },
-                modifier = Modifier.size(24.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.ContentCopy,
-                    contentDescription = "Copy",
-                    tint = BossThemeColors.TextMuted,
-                    modifier = Modifier.size(14.dp),
-                )
+            // Do not offer a destructive no-op: writing an empty string would erase the clipboard.
+            val clipboardText = toastClipboardText(message)
+            if (clipboardText.isNotEmpty()) {
+                IconButton(
+                    onClick = {
+                        runCatching { clipboard.setText(AnnotatedString(clipboardText)) }
+                            .onFailure { toastLogger.warn(LogCategory.UI, "Could not copy toast text", error = it) }
+                    },
+                    modifier = Modifier.size(24.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ContentCopy,
+                        contentDescription = "Copy notification text",
+                        tint = BossThemeColors.TextMuted,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
 
             // Dismiss button
