@@ -22,16 +22,14 @@ import kotlin.test.assertTrue
  * Pins that a toast's plugin-controlled text is bounded, so it cannot push a dismiss button
  * off-window (BossConsole#154).
  *
- * `title` and `message` are arbitrary plugin strings. Before [TOAST_TITLE_MAX_LINES] /
- * [TOAST_MESSAGE_MAX_LINES] neither [androidx.compose.material3.Text] had a `maxLines`, so a verbose
+ * `title`, `message`, and `action.label` are arbitrary plugin strings. Without line caps, a verbose
  * toast grew without limit - and a stack of [PluginToastState]'s `maxToasts` (3) INDEFINITE toasts,
- * which clear only by hand, grew the content-sized overlay past the parent pane it may fill, landing
- * the lowest toast's dismiss button off-window where it cannot be clicked. The two assertions below
- * are the single toast and the full stack: capping each toast keeps both within the overlay's own
- * 600.dp ceiling (`TOAST_OVERLAY_INITIAL_SIZE`), so every dismiss button stays reachable.
+ * which clear only by hand, could grow past its parent pane and strand dismiss buttons off-window.
+ * The tests below cover both a single toast and the action-bearing stack used by plugin-disabled
+ * notifications. They measure intrinsic content height, not the overlay's parent-derived ceiling.
  *
- * Removing either `maxLines` fails these: the single toast balloons past [SINGLE_TOAST_CEILING] and
- * the stack's lowest dismiss button falls past [STACK_CEILING].
+ * Removing any `maxLines` fails these: the single toast balloons past [SINGLE_TOAST_THRESHOLD] and
+ * the stack's lowest dismiss button falls past [STACK_REGRESSION_THRESHOLD].
  */
 class PluginToastTextBoundsTest {
     @get:Rule
@@ -56,6 +54,7 @@ class PluginToastTextBoundsTest {
                             type = ToastType.ERROR,
                             title = LOREM.repeat(20),
                             message = LOREM.repeat(400),
+                            action = verboseAction(),
                         ),
                     onDismiss = {},
                 )
@@ -65,14 +64,14 @@ class PluginToastTextBoundsTest {
         val bounds = rule.onNodeWithTag(TOAST_TAG).getUnclippedBoundsInRoot()
         val height = bounds.bottom - bounds.top
         assertTrue(
-            height < SINGLE_TOAST_CEILING,
-            "A toast with unbounded text rendered $height, past the $SINGLE_TOAST_CEILING cap - " +
+            height < SINGLE_TOAST_THRESHOLD,
+            "A toast with unbounded text rendered $height, past the $SINGLE_TOAST_THRESHOLD threshold - " +
                 "its text is no longer bounded by maxLines.",
         )
     }
 
     @Test
-    fun `a full stack of verbose toasts keeps every dismiss button within the overlay ceiling`() {
+    fun `a full stack of verbose action toasts remains bounded`() {
         val toastState = PluginToastState(scope, maxToasts = 3)
         repeat(3) { i ->
             toastState.show(
@@ -81,6 +80,7 @@ class PluginToastTextBoundsTest {
                     title = "Plugin error $i ${LOREM.repeat(20)}",
                     message = LOREM.repeat(400),
                     duration = ToastDuration.INDEFINITE,
+                    action = verboseAction(),
                 ),
             )
         }
@@ -100,11 +100,17 @@ class PluginToastTextBoundsTest {
                 rule.onAllNodesWithContentDescription("Dismiss")[i].getUnclippedBoundsInRoot().bottom
             }
         assertTrue(
-            lowestBottom < STACK_CEILING,
-            "The lowest dismiss button sits at $lowestBottom, past the $STACK_CEILING overlay " +
-                "ceiling - a full stack of verbose toasts still overflows the window.",
+            lowestBottom < STACK_REGRESSION_THRESHOLD,
+            "The lowest dismiss button sits at $lowestBottom, past the $STACK_REGRESSION_THRESHOLD " +
+                "regression threshold - the action-bearing stack is no longer bounded.",
         )
     }
+
+    private fun verboseAction() =
+        ToastAction(
+            label = LOREM.repeat(100),
+            onClick = {},
+        )
 
     private companion object {
         const val TOAST_TAG = "bounded-toast"
@@ -113,11 +119,11 @@ class PluginToastTextBoundsTest {
 
         // A single capped toast (2-line title + 6-line message + chrome) is well under this; an
         // uncapped one wrapping hundreds of lines is thousands of dp.
-        val SINGLE_TOAST_CEILING = 300.dp
+        val SINGLE_TOAST_THRESHOLD = 350.dp
 
-        // The overlay's own first-frame ceiling is 600.dp (TOAST_OVERLAY_INITIAL_SIZE); a capped
-        // three-toast stack stays under it, an uncapped stack runs far past.
-        val STACK_CEILING = 600.dp
+        // This is an intrinsic-height regression threshold, not the overlay's measurement ceiling.
+        // A capped three-toast action stack stays under it; an uncapped stack runs far past it.
+        val STACK_REGRESSION_THRESHOLD = 700.dp
 
         const val LOREM = "lorem ipsum dolor sit amet "
     }

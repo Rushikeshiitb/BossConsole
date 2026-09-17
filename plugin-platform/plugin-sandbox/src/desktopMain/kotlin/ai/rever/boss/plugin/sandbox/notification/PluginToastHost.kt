@@ -42,22 +42,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * The line caps on a single toast's title and message text.
+ * The line caps on a single toast's plugin-controlled text.
  *
- * A toast's `title` and `message` are plugin-controlled strings of unbounded length. Without a cap
- * the [Text]s grow without limit, so a single verbose toast - or, worse, a stack of [PluginToastState]'s
- * `maxToasts` (3) INDEFINITE ones, which are dismissed only by hand - grows the content-sized toast
- * overlay past the parent content pane it is allowed to fill. The overflow is not cosmetic: the
- * dismiss button of a toast pushed below that ceiling lands off-window and cannot be clicked, and on
- * the INDEFINITE path clicking dismiss is the only way to clear it (BossConsole#154).
+ * A toast's `title`, `message`, and optional action label are plugin-controlled strings of unbounded
+ * length. Without caps, a single verbose toast - or, worse, a stack of [PluginToastState]'s `maxToasts`
+ * (3) INDEFINITE ones, which are dismissed only by hand - can grow past the parent content pane. The
+ * overflow is not cosmetic: a dismiss button pushed off-window cannot be clicked (BossConsole#154).
  *
- * Capping each toast to a bounded height keeps even a full stack within the overlay's own ceiling, so
- * every toast's dismiss button stays on-window. The message is allowed more lines than the title
- * because it carries the detail; both end in an ellipsis rather than truncating mid-glyph. A plugin
- * that needs to say more should raise an action toast, not a taller one.
+ * These caps bound each toast's contribution to the stack independently of its width. The parent pane
+ * remains the actual measurement ceiling, so an unusually short pane can still require a broader
+ * scrolling or stack-layout solution. Detail text gets more lines than labels; all overflow ends in
+ * an ellipsis rather than growing the toast indefinitely.
  */
 internal const val TOAST_TITLE_MAX_LINES = 2
 internal const val TOAST_MESSAGE_MAX_LINES = 6
+internal const val TOAST_ACTION_MAX_LINES = 1
 
 /**
  * Host composable for displaying plugin toast notifications.
@@ -176,6 +175,8 @@ fun PluginToast(
                             color = BossThemeColors.AccentColor,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
+                            maxLines = TOAST_ACTION_MAX_LINES,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
