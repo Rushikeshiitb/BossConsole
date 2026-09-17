@@ -83,15 +83,18 @@ fun PluginToastHost(
         // user has. dismissAll() has existed on the controller all along with no surface that calls
         // it; this is that surface. Shown only past a single toast, where "all" means more than the
         // lone dismiss button beside it already does.
-        if (shouldShowClearAllControl(toasts.size)) {
-            AnimatedVisibility(
-                visible = true,
-                enter = fadeIn(),
-                exit = fadeOut(),
+        AnimatedVisibility(
+            visible = shouldShowClearAllControl(toasts.size),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = BossThemeColors.SurfaceColor,
+                modifier = Modifier.border(1.dp, BossThemeColors.BorderColor, RoundedCornerShape(12.dp)),
             ) {
                 TextButton(
                     onClick = { toastState.dismissAll() },
-                    modifier = Modifier.padding(bottom = 2.dp),
                 ) {
                     Text(
                         text = "Clear all",
