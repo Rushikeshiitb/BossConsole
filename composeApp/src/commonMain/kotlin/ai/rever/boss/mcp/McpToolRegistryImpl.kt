@@ -126,6 +126,7 @@ object McpToolRegistryImpl : McpToolRegistry {
     init {
         registerProvider(WorkspaceMcpToolProvider)
         registerProvider(WorkspacePortabilityMcpToolProvider)
+        registerProvider(DownloadHistoryMcpToolProvider)
         registerProvider(SnippetMcpToolProvider)
         registerProvider(NotificationMcpToolProvider)
         registerProvider(IntrospectionMcpToolProvider)
