@@ -105,7 +105,9 @@ class PluginToastAutoDismissPauseTest {
                     Thread {
                         try {
                             state.show(short("background"))
-                        } catch (t: Throwable) {
+                        } catch (
+                            @Suppress("TooGenericExceptionCaught") t: Throwable,
+                        ) {
                             errors.add(t)
                         }
                     }
