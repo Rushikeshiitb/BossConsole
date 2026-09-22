@@ -41,7 +41,6 @@ class PluginToastState(
     // While paused, auto-dismiss timers do not run. Set by [pauseAutoDismiss] when the pointer is
     // over the toast area so a toast does not disappear out from under a user who is reading it or
     // reaching for its action/dismiss button.
-    @Volatile
     private var paused = false
 
     // One lock for `paused` and `dismissJobs`: both are read and written from the scope's
