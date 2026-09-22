@@ -7,8 +7,10 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.util.Collections
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Pins hover-pause of the toast auto-dismiss timers: while [PluginToastState.pauseAutoDismiss] is in
@@ -83,5 +85,39 @@ class PluginToastAutoDismissPauseTest {
             toastState.resumeAutoDismiss()
             advanceTimeBy(3001)
             assertEquals(0, toastState.toastCount(), "Resume schedules the deferred toast.")
+        }
+
+    @Test
+    fun `a background show racing a resume is scheduled exactly once`() =
+        testScope.runTest {
+            // `show` can arrive from the plugin sandbox manager's scope (e.g. a plugin-restart
+            // notification) while the pointer has just left, i.e. while `resumeAutoDismiss` is
+            // sweeping. The lock must keep that from producing a toast with no timer, a
+            // ConcurrentModificationException, or two timers for one toast.
+            repeat(25) {
+                val state = PluginToastState(testScope, maxToasts = 3)
+                state.show(short("foreground"))
+                advanceTimeBy(1000)
+                state.pauseAutoDismiss()
+
+                val errors = Collections.synchronizedList(mutableListOf<Throwable>())
+                val thread =
+                    Thread {
+                        try {
+                            state.show(short("background"))
+                        } catch (t: Throwable) {
+                            errors.add(t)
+                        }
+                    }
+                thread.start()
+                state.resumeAutoDismiss()
+                thread.join()
+
+                assertTrue(errors.isEmpty(), "concurrent show must not throw: ${errors.firstOrNull()}")
+                advanceTimeBy(2999)
+                assertEquals(2, state.toastCount(), "both toasts keep their fresh full duration")
+                advanceTimeBy(2)
+                assertEquals(0, state.toastCount(), "each toast is dismissed exactly once")
+            }
         }
 }

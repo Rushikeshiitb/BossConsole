@@ -16,6 +16,13 @@ import kotlinx.coroutines.launch
  *
  * @param scope CoroutineScope for managing toast timers
  * @param maxToasts Maximum number of toasts to display simultaneously (default: 3)
+ *
+ * The timers run on the scope's dispatcher (Main in the app), but `show` is also called
+ * synchronously off that thread - the plugin sandbox manager's watchdog notifies listeners on
+ * its own scope when a plugin restarts. Every read or write of the shared `paused` flag and
+ * `dismissJobs` map is therefore guarded by [timerLock], which keeps a background `show` from
+ * reading a stale `paused`, iterating a map a pause is mid-clearing, or scheduling a second
+ * timer for a toast a resume is already sweeping.
  */
 class PluginToastState(
     private val scope: CoroutineScope,
@@ -34,16 +41,23 @@ class PluginToastState(
     // While paused, auto-dismiss timers do not run. Set by [pauseAutoDismiss] when the pointer is
     // over the toast area so a toast does not disappear out from under a user who is reading it or
     // reaching for its action/dismiss button.
+    @Volatile
     private var paused = false
 
-    override fun show(message: ToastMessage) {
-        // Add to queue, respecting max limit
-        _toasts.value = (_toasts.value + message).takeLast(maxToasts)
+    // One lock for `paused` and `dismissJobs`: both are read and written from the scope's
+    // dispatcher and, for `show`, from whatever thread the plugin notification came in on.
+    private val timerLock = Any()
 
-        // Schedule auto-dismiss based on duration - unless paused, in which case [resumeAutoDismiss]
-        // will schedule it when the pointer leaves.
-        if (!paused) {
-            scheduleAutoDismiss(message)
+    override fun show(message: ToastMessage) {
+        synchronized(timerLock) {
+            // Add to queue, respecting max limit
+            _toasts.value = (_toasts.value + message).takeLast(maxToasts)
+
+            // Schedule auto-dismiss based on duration - unless paused, in which case
+            // [resumeAutoDismiss] will schedule it when the pointer leaves.
+            if (!paused) {
+                scheduleAutoDismiss(message)
+            }
         }
     }
 
@@ -62,10 +76,12 @@ class PluginToastState(
      * timer. Idempotent.
      */
     fun pauseAutoDismiss() {
-        if (paused) return
-        paused = true
-        dismissJobs.values.forEach { it.cancel() }
-        dismissJobs.clear()
+        synchronized(timerLock) {
+            if (paused) return
+            paused = true
+            dismissJobs.values.forEach { it.cancel() }
+            dismissJobs.clear()
+        }
     }
 
     /**
@@ -73,15 +89,19 @@ class PluginToastState(
      * full duration afresh, so a toast the pointer just left does not vanish immediately. Idempotent.
      */
     fun resumeAutoDismiss() {
-        if (!paused) return
-        paused = false
-        _toasts.value.forEach { scheduleAutoDismiss(it) }
+        synchronized(timerLock) {
+            if (!paused) return
+            paused = false
+            _toasts.value.forEach { scheduleAutoDismiss(it) }
+        }
     }
 
     override fun dismiss(id: String) {
         // Cancel any pending dismiss job
-        dismissJobs[id]?.cancel()
-        dismissJobs.remove(id)
+        synchronized(timerLock) {
+            dismissJobs[id]?.cancel()
+            dismissJobs.remove(id)
+        }
 
         // Remove from the list
         _toasts.value = _toasts.value.filterNot { it.id == id }
@@ -89,8 +109,10 @@ class PluginToastState(
 
     override fun dismissAll() {
         // Cancel all pending dismiss jobs
-        dismissJobs.values.forEach { it.cancel() }
-        dismissJobs.clear()
+        synchronized(timerLock) {
+            dismissJobs.values.forEach { it.cancel() }
+            dismissJobs.clear()
+        }
 
         // Clear all toasts
         _toasts.value = emptyList()
