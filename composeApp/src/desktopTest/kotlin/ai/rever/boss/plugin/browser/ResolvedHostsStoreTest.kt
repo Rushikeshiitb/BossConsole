@@ -1,13 +1,11 @@
 package ai.rever.boss.plugin.browser
 
 import ai.rever.boss.plugin.pathutils.BossDirectories
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -17,26 +15,23 @@ import kotlin.test.assertTrue
 /**
  * Pins the snapshot-under-lock contract for [ResolvedHostsStore].
  *
- * The regression: [ResolvedHostsStore.recordLoaded] captured `hosts.toList().sorted()` on the
- * calling thread and only acquired `saveLock` inside the coroutine in `save()`. Two
- * `recordLoaded` calls landing close together both captured the same snapshot, raced for the
- * lock, and whichever won LAST overwrote the newer in-memory state with the older snapshot -
- * silently dropping the host added by the other call.
+ * The regression: [ResolvedHostsStore.recordLoaded] used to read `hosts.toList().sorted()` on the
+ * calling thread and pass that frozen list into `save`, which only acquired `saveLock` inside its
+ * coroutine. Two `recordLoaded` calls landing close together captured snapshots at different set
+ * sizes and then raced for the lock; whichever save acquired the lock LAST overwrote the file with
+ * its own snapshot, so an older, smaller snapshot could win and silently drop a host another call
+ * had already added.
  *
- * The fix takes the snapshot inside `saveLock.withLock` so the in-memory `hosts` set, which is
- * already a `ConcurrentHashMap.newKeySet`, can grow between the two calls without one losing.
+ * The fix reads `hosts` inside `saveLock`, at write time. These tests observe what the launched
+ * production saves actually leave on disk - via [ResolvedHostsStore.awaitPendingSaves], never a
+ * fresh forced save, which would mask the race - so they fail on the pre-fix call-site snapshot and
+ * pass on the fix.
  */
 class ResolvedHostsStoreTest {
-    private lateinit var workDir: File
     private lateinit var tempFile: File
 
     @BeforeTest
     fun setUp() {
-        workDir =
-            File.createTempFile("resolved-hosts-test-", ".dir").apply {
-                delete()
-                mkdirs()
-            }
         tempFile = File.createTempFile("resolved-hosts-test-", ".json").apply { delete() }
         ResolvedHostsStore.storeFile = tempFile
         ResolvedHostsStore.clear()
@@ -47,92 +42,110 @@ class ResolvedHostsStoreTest {
         ResolvedHostsStore.storeFile = BossDirectories.resolve("browser-resolved-hosts.json")
         ResolvedHostsStore.clear()
         tempFile.delete()
-        workDir.deleteRecursively()
     }
 
     /**
-     * Pin the post-fix property directly. Each `recordLoaded` fires the save path; `saveNowBlocking`
-     * forces the writes to land in the calling thread under the lock. The file MUST contain every
-     * host added, regardless of how the snapshot is taken relative to the lock - the in-memory
-     * `hosts` set is the source of truth, so a correctly-ordered snapshot includes all of it.
+     * The exact race the fix closes, as two interleaved snapshot saves. Each round records two new
+     * hosts from two threads at once, then awaits the launched saves and asserts both survive. With
+     * the pre-fix call-site snapshot, the save that acquires the lock last can carry a one-host
+     * snapshot and overwrite the other host - so across many rounds the older snapshot wins at least
+     * once and the assertion fails. With the snapshot taken under the lock, the last writer always
+     * serialises the current set, so neither host is ever lost.
      */
     @Test
-    fun `consecutive recordLoaded calls persist every host under the lock`() {
-        repeat(50) { i -> ResolvedHostsStore.recordLoaded("host-$i.example") }
+    fun `an older concurrent save never overwrites a newer one`() {
+        repeat(ROUNDS) { round ->
+            ResolvedHostsStore.clear()
+            tempFile.delete()
+            val a = "a-$round.example"
+            val b = "b-$round.example"
 
-        // Drive the same write path `save` uses, but inline. The lock makes the test
-        // deterministic - we know exactly which snapshot landed.
-        val payload = ResolvedHostsStore.saveNowBlocking()
+            val start = CountDownLatch(1)
+            val t1 =
+                thread {
+                    start.await()
+                    ResolvedHostsStore.recordLoaded(a)
+                }
+            val t2 =
+                thread {
+                    start.await()
+                    ResolvedHostsStore.recordLoaded(b)
+                }
+            start.countDown()
+            t1.join()
+            t2.join()
 
-        val persisted = decode(payload)
-        assertEquals(50, persisted.size, "every recorded host must end up on disk")
-        for (i in 0 until 50) {
+            ResolvedHostsStore.awaitPendingSaves()
+
+            val persisted = decode(tempFile.readText())
             assertTrue(
-                "host-$i.example" in persisted,
-                "host-$i.example was recorded but did not land in the persisted set",
+                a in persisted && b in persisted,
+                "round $round dropped a host to an out-of-order save: got $persisted",
             )
         }
     }
 
     /**
-     * The race the fix closes. With the snapshot taken outside the lock, two `recordLoaded`
-     * calls in flight can race the lock and the LAST save can overwrite the FIRST's snapshot
-     * with a smaller one - dropping the host added by the first save.
-     *
-     * Here we exercise the production code path (the launched coroutine) for many concurrent
-     * recordLoaded calls and then drain saves; the only way every host lands is for the
-     * snapshot to be taken inside the lock, so any snapshot-outside code regresses this test.
+     * The same property under broad contention: a burst of concurrent `recordLoaded` calls must all
+     * survive. After the launched saves drain, the file must hold every host - which only holds if
+     * the last save to run reads the set under the lock rather than replaying a snapshot frozen when
+     * its own call arrived.
      */
     @Test
-    fun `many concurrent recordLoaded calls all land on disk`() =
-        runBlocking {
-            val count = 200
-            val deferreds =
-                (0 until count).map { i ->
-                    withContext(Dispatchers.IO) {
-                        async {
-                            // Spread the calls over a small window so the launched saves genuinely race.
-                            ResolvedHostsStore.recordLoaded("concurrent-$i.example")
-                            delay(2L)
-                        }
-                    }
+    fun `every host from a burst of concurrent recordLoaded lands on disk`() {
+        val count = 200
+        val pool = Executors.newFixedThreadPool(16)
+        try {
+            val start = CountDownLatch(1)
+            val done = CountDownLatch(count)
+            repeat(count) { i ->
+                pool.execute {
+                    start.await()
+                    ResolvedHostsStore.recordLoaded("burst-$i.example")
+                    done.countDown()
                 }
-            deferreds.awaitAll()
+            }
+            start.countDown()
+            assertTrue(done.await(30, TimeUnit.SECONDS), "recordLoaded workers did not finish in time")
 
-            // Drain: kick a final synchronous save, then read what landed.
-            ResolvedHostsStore.saveNowBlocking()
+            ResolvedHostsStore.awaitPendingSaves()
+
             val persisted = decode(tempFile.readText())
-
             assertEquals(
                 count,
                 persisted.size,
-                "expected every concurrent recordLoaded call to land on disk, " +
-                    "got ${persisted.size} of $count - the snapshot was taken outside saveLock",
+                "expected every concurrent recordLoaded to land; a smaller set means a stale " +
+                    "snapshot overwrote a newer one",
             )
             for (i in 0 until count) {
-                assertTrue(
-                    "concurrent-$i.example" in persisted,
-                    "concurrent-$i.example was recorded but is missing from disk",
-                )
+                assertTrue("burst-$i.example" in persisted, "burst-$i.example was recorded but is missing")
             }
+        } finally {
+            pool.shutdownNow()
         }
+    }
 
     /**
-     * Empty inputs do not write. A common side-effect of moving the snapshot is accidentally
-     * serialising an empty set on every keystroke that does not add a new host - and the
-     * observable file write here would surface it.
+     * A blank host neither mutates the set nor writes. Unchanged by the fix and identical on both
+     * sides - it guards the early return in [ResolvedHostsStore.recordLoaded], not the race - so it
+     * uses [ResolvedHostsStore.saveNowBlocking] to compare the bytes before and after directly.
      */
     @Test
     fun `recordLoaded of a blank host does not write or mutate the set`() {
+        ResolvedHostsStore.recordLoaded("seed.example")
         val before = ResolvedHostsStore.saveNowBlocking()
         ResolvedHostsStore.recordLoaded("")
         ResolvedHostsStore.recordLoaded("   ")
         val after = ResolvedHostsStore.saveNowBlocking()
-        assertEquals(before, after, "no new host, no write - bytes must be identical")
+        assertEquals(before, after, "no new host means no change to the persisted bytes")
     }
 
     private fun decode(payload: String): Set<String> =
         kotlinx.serialization.json.Json
             .decodeFromString<List<String>>(payload)
             .toSet()
+
+    private companion object {
+        const val ROUNDS = 200
+    }
 }

@@ -6,8 +6,10 @@ import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -73,10 +75,11 @@ object ResolvedHostsStore {
     fun recordLoaded(host: String) {
         if (host.isBlank()) return
         if (hosts.add(host.lowercase())) {
-            // Bind the destination now; the contents snapshot is taken inside `save` under
-            // `saveLock`, so two recordLoaded calls landing together cannot race the lock and
-            // overwrite a newer in-memory state with an older snapshot - the failure mode
-            // captured by `concurrentRecordLoadedRetainsAllHosts` in ResolvedHostsStoreTest.
+            // Bind the destination now; the contents are read inside `save` under `saveLock`, at
+            // the moment the write runs rather than here at the call site. That is what keeps two
+            // recordLoaded calls landing together from writing out of order - the failure mode
+            // pinned by `an older concurrent save never overwrites a newer one` in
+            // ResolvedHostsStoreTest.
             save(storeFile)
         }
     }
@@ -86,9 +89,12 @@ object ResolvedHostsStore {
             withContext(Dispatchers.IO) {
                 saveLock.withLock {
                     try {
-                        // Snapshot under the lock so concurrent recordLoaded callers cannot
-                        // publish an out-of-order write. The in-memory `hosts` set is a
-                        // ConcurrentHashMap.newKeySet so a `toList()` here is a stable snapshot.
+                        // Read `hosts` here, under the lock, rather than at the call site, so two
+                        // recordLoaded calls in flight cannot publish out-of-order writes: whichever
+                        // save runs last still serialises the current set, not a value frozen
+                        // earlier. `hosts` is a ConcurrentHashMap-backed set, so this `toList()` is
+                        // a weakly-consistent iteration (it never throws and reflects every add that
+                        // happened-before it); the lock is what orders the writes, not the set.
                         val snapshot = hosts.toList().sorted()
                         target.atomicWriteText(json.encodeToString(snapshot))
                     } catch (e: IOException) {
@@ -108,12 +114,15 @@ object ResolvedHostsStore {
      * Save synchronously, in the calling thread, holding [saveLock]. Returns the bytes that
      * landed on disk so a test can pin the snapshot shape.
      *
-     * Production uses the debounced [save] launch on `scope`; the lock here is the same lock
-     * that path takes, so a test driving this method is testing the exact same write path a
-     * coroutine-driven save would.
+     * This is not the production path: production fires [save] on [scope] with no wait. It shares
+     * the parts that matter for correctness - the same [saveLock], the same snapshot-under-lock
+     * read of `hosts`, the same [atomicWriteText] - but runs inline instead of on a coroutine, so a
+     * test can read back the exact bytes deterministically. To await the launched production saves
+     * instead of forcing a fresh one, use [awaitPendingSaves]; this method writes a new full
+     * snapshot, which would mask an earlier out-of-order write.
      */
     internal fun saveNowBlocking(): String =
-        kotlinx.coroutines.runBlocking {
+        runBlocking {
             saveLock.withLock {
                 val snapshot = hosts.toList().sorted()
                 val payload = json.encodeToString(snapshot)
@@ -121,4 +130,17 @@ object ResolvedHostsStore {
                 payload
             }
         }
+
+    /**
+     * Block until every [save] already launched on [scope] has finished. Test-only: it lets a
+     * regression assert what the fire-and-forget production saves actually left on disk, without
+     * writing a fresh full snapshot (which [saveNowBlocking] does and which would hide a stale
+     * out-of-order write). Callers must have finished issuing their [recordLoaded] calls first, so
+     * that all the save jobs to await already exist as children of [scope].
+     */
+    internal fun awaitPendingSaves() {
+        runBlocking {
+            scope.coroutineContext[Job]?.children?.forEach { it.join() }
+        }
+    }
 }
