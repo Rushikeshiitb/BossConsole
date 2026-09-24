@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
@@ -49,8 +50,9 @@ class PluginToastState(
 
     override fun show(message: ToastMessage) {
         synchronized(timerLock) {
-            // Add to queue, respecting max limit
-            _toasts.value = (_toasts.value + message).takeLast(maxToasts)
+            // Add to queue, respecting max limit. Atomic read-modify-write so a locked `show` and an
+            // unlocked `dismiss`/`dismissAll` cannot lose each other's update to `_toasts`.
+            _toasts.update { (it + message).takeLast(maxToasts) }
 
             // Schedule auto-dismiss based on duration - unless paused, in which case
             // [resumeAutoDismiss] will schedule it when the pointer leaves.
@@ -102,8 +104,9 @@ class PluginToastState(
             dismissJobs.remove(id)
         }
 
-        // Remove from the list
-        _toasts.value = _toasts.value.filterNot { it.id == id }
+        // Remove from the list. Atomic so it cannot clobber a concurrent `show` that added under
+        // the lock; the two writers use different synchronization, so the CAS is what serializes them.
+        _toasts.update { list -> list.filterNot { it.id == id } }
     }
 
     override fun dismissAll() {

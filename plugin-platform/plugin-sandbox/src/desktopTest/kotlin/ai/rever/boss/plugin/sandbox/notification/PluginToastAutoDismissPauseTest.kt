@@ -8,6 +8,9 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -36,6 +39,55 @@ class PluginToastAutoDismissPauseTest {
             message = id,
             duration = ToastDuration.SHORT,
         )
+
+    private fun indefinite(id: String) =
+        ToastMessage(
+            id = id,
+            type = ToastType.INFO,
+            title = id,
+            message = id,
+            duration = ToastDuration.INDEFINITE,
+        )
+
+    @Test
+    fun `a dismiss of an absent id never drops a concurrently shown toast`() {
+        // Regression for the lost-update race: `show` writes `_toasts` under the lock, while
+        // `dismiss` rewrites `_toasts` too. If either does a plain `_toasts.value = _toasts.value...`
+        // read-modify-write, a `dismiss` for an unrelated id can overwrite a concurrent `show` with a
+        // stale snapshot and silently drop a toast that was never dismissed. Routing both through
+        // `_toasts.update { }` makes each mutation an atomic CAS, so every shown toast survives.
+        // INDEFINITE toasts schedule no timers, so this exercises only the `_toasts` contention.
+        val shows = 200
+        val pool = Executors.newFixedThreadPool(8)
+        try {
+            repeat(20) {
+                val state = PluginToastState(testScope, maxToasts = Int.MAX_VALUE)
+                val startGate = CountDownLatch(1)
+                val done = CountDownLatch(shows * 2)
+                repeat(shows) { i ->
+                    pool.execute {
+                        startGate.await()
+                        state.show(indefinite("toast-$i"))
+                        done.countDown()
+                    }
+                    pool.execute {
+                        startGate.await()
+                        state.dismiss("absent-$i")
+                        done.countDown()
+                    }
+                }
+                startGate.countDown()
+                assertTrue(done.await(30, TimeUnit.SECONDS), "workers did not finish in time")
+                assertEquals(
+                    shows,
+                    state.toastCount(),
+                    "a dismiss of an absent id must not clobber a concurrent show",
+                )
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+    }
 
     @Test
     fun `INDEFINITE has no auto-dismiss delay`() {
